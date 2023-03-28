@@ -1,0 +1,21 @@
+{
+    "compilerOptions": {
+        "target": "ES2022",
+        "module": "ES2022",
+        "lib": [
+            "dom",
+            "ES2020",
+        ],
+        "outDir": "./dist",
+        "declaration": true,
+        "noImplicitAny": true,
+        "noImplicitThis": true,
+        "strictNullChecks": true,
+        "strictFunctionTypes": true,
+        "forceConsistentCasingInFileNames": true
+    },
+    "exclude": [
+        "dist",
+        "node_modules"
+    ]
+}

@@ -1,0 +1,31 @@
+{
+  "name": "@badgeteam/mch2022-webusb-lib",
+  "version": "1.0.0",
+  "description": "Web API for the Badge.team MCH2022 badge",
+  "keywords": [
+    "USB", "WebUSB",
+    "badge",
+    "MCH2022"
+  ],
+
+  "main": "./dist/badge-api.js",
+  "files": [
+    "./dist",
+    "LICENSE",
+    "README.md"
+  ],
+
+  "dependencies": {
+    "@types/w3c-web-usb": "^1.0.6",
+    "typescript":">=4.5.0 <6.0.0"
+  },
+
+  "scripts": {
+    "build": "tsc"
+  },
+
+  "repository": "github:badgeteam/mch2022-webusb-lib",
+  "bugs": "https://github.com/badgeteam/mch2022-webusb-lib/issues",
+
+  "author": "Reinier van der Leer <badges@pwuts.nl> (https://pwuts.nl)"
+}
