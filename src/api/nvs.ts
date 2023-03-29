@@ -168,7 +168,7 @@ export class BadgeNVSApi {
             assertBigint(`Setting 0x${type.toString(0x10)}`, data);
         }
         function _assertBuffer(_data: typeof data): asserts _data is ArrayBuffer {
-            assertInstanceOf(`Setting 0x${type.toString(0x10)}`, ArrayBuffer, data);
+            assertInstanceOf(ArrayBuffer, `Setting 0x${type.toString(0x10)}`, data);
         }
 
         let buffer: ArrayBuffer;

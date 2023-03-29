@@ -120,7 +120,7 @@ export class BadgeFileSystemApi {
     /** @returns whether the operation succeeded */
     async writeFile(filePath: string, data: ArrayBuffer, progressCallback?: ProgressCallback) {
         assertString('filePath', filePath);
-        assertInstanceOf('data', ArrayBuffer, data);
+        assertInstanceOf(ArrayBuffer, 'data', data);
 
         if (progressCallback) {
             progressCallback("Creating...", 0);

@@ -16,7 +16,7 @@ export function assertString(varName: string, value: any, minLength = 0, maxLeng
     throw new TypeError(`${varName} must be between ${minLength} and ${maxLength} characters long`);
 }
 
-export function assertInstanceOf(varName: string, type: Function, value: any): asserts value is typeof type {
+export function assertInstanceOf(type: Function, varName: string, value: any): asserts value is typeof type {
     if (!(value instanceof type))
     throw _typeError(varName, _typeName(type), value);
 }

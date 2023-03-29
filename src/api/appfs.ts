@@ -66,10 +66,10 @@ export class BadgeAppFSApi {
 
     /** @returns whether writing the app to AppFS succeeded */
     async write(name: string, title: string, version: number, data: ArrayBuffer, progressCallback?: ProgressCallback): Promise<boolean> {
-        assertString('name', name, 1, 16);
-        assertString('title', title, 1, 16);
+        assertString('name', name, 1, 47);
+        assertString('title', title, 1, 63);
         assertNumber('version', version);
-        assertInstanceOf('data', ArrayBuffer, data);
+        assertInstanceOf(ArrayBuffer, 'data', data);
 
         let request = new Uint8Array(10 + name.length + title.length);
         let dataView = new DataView(request.buffer);
