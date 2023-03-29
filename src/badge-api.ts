@@ -3,7 +3,7 @@
  * @author Reinier van der Leer
  */
 
-import { BadgeFilesystemAPI } from "./api/filesystem";
+import { BadgeFileSystemApi } from "./api/filesystem";
 import { BadgeAppFSApi } from "./api/appfs";
 import { BadgeNVSApi } from "./api/nvs";
 import { BadgeUSB } from "./badge-usb";
@@ -30,11 +30,11 @@ export class BadgeAPI {
         return this.badge !== undefined && this.badge.isConnected;
     }
 
-    assertConnected(badge?: BadgeUSB): asserts badge is BadgeUSB {
-        if (!this.badge) {
-            throw new Error("not connected to a badge");
+    assertConnected(badge = this.badge): asserts badge is BadgeUSB {
+        if (!badge) {
+            throw new Error("no connected badge");
         }
-        this.badge.assertConnected();
+        badge.assertConnected();
     }
 
     async syncConnection(): Promise<void> {
@@ -53,15 +53,15 @@ export class BadgeAPI {
 
 
     /*** Filesystem API ***/
-    public filesystem = new BadgeFilesystemAPI(this.transaction);
+    public fileSystem = new BadgeFileSystemApi(this.transaction);
 
     /*** AppFS API ***/
-    public appfs = new BadgeAppFSApi(
-        this.filesystem,
+    public appFS = new BadgeAppFSApi(
+        this.fileSystem,
         this.disconnect,
         this.transaction,
     );
 
-    /*** NVS Config API */
+    /*** NVS API */
     public nvs = new BadgeNVSApi(this.transaction);
 }

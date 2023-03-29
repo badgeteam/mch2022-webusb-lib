@@ -1,4 +1,4 @@
-import { assertNumber, assertBigint, assertString, assertInstanceOf } from "../lib/assert";
+import { assertNumber, assertBigint, assertString, assertInstanceOf } from "../lib/assert-type";
 import { concatBuffers } from "../lib/buffers";
 import { BadgeUSB } from "../badge-usb";
 
@@ -15,6 +15,9 @@ export enum NVSType {
     Blob   = 0x42,
 }
 
+export type NVSNumberType = NVSType.Int8 | NVSType.Int16 | NVSType.Int32 | NVSType.Uint8 | NVSType.Uint16 | NVSType.Uint32;
+export type NVSBigintType = NVSType.Int64 | NVSType.Uint64;
+
 export class BadgeNVSApi {
     constructor(
         private transaction: BadgeUSB['transaction'],
@@ -23,6 +26,10 @@ export class BadgeNVSApi {
     textEncoder = new TextEncoder();
     textDecoder = new TextDecoder();
 
+    /**
+     * Lists the settings in the given `namespace`
+     * @param namespace default: `''` (root namespace)
+     */
     async list(namespace = "") {
         assertString('namespace', namespace);
 
@@ -52,7 +59,17 @@ export class BadgeNVSApi {
         return result;
     }
 
-    async read(namespace: string, key: string, type: NVSType) {
+    /**
+     * Retrieves an entry from NVS
+     * @returns the stored value, or `null` if the entry does not exist
+     */
+    async read(namespace: string, key: string, type: NVSType.String): Promise<string | null>
+    async read(namespace: string, key: string, type: NVSNumberType):  Promise<number | null>
+    async read(namespace: string, key: string, type: NVSBigintType):  Promise<bigint | null>
+    async read(namespace: string, key: string, type: NVSType.Blob):   Promise<ArrayBuffer | null>
+    async read(namespace: string, key: string, type: NVSType):        Promise<string | number | bigint | ArrayBuffer | null>
+
+    async read(namespace: string, key: string, type: NVSType): Promise<string | number | bigint | ArrayBuffer | null> {
         if (typeof type === "string") type = nvsTypeStringToNumber(type);
 
         assertString('namespace', namespace, 1, 16);
@@ -65,12 +82,19 @@ export class BadgeNVSApi {
         request.set([key.length], 1 + namespace.length);
         request.set(this.textEncoder.encode(key), 2 + namespace.length);
         request.set([type], 2 + namespace.length + key.length);
+
         let result = await this.transaction(BadgeUSB.PROTOCOL_COMMAND_CONFIGURATION_READ, request.buffer, 4000);
-        if (result === null) return null;
         return this.decodeNVSData(type, result);
     }
 
-    async write(namespace: string, key: string, type: NVSType, value: number) {
+    /** @returns whether writing the entry to NVS succeeded */
+    async write(namespace: string, key: string, type: NVSType.String, value: string):      Promise<boolean>
+    async write(namespace: string, key: string, type: NVSNumberType,  value: number):      Promise<boolean>
+    async write(namespace: string, key: string, type: NVSBigintType,  value: bigint):      Promise<boolean>
+    async write(namespace: string, key: string, type: NVSType.Blob,   value: ArrayBuffer): Promise<boolean>
+    async write(namespace: string, key: string, type: NVSType, value: string | number | bigint | ArrayBuffer): Promise<boolean>
+
+    async write(namespace: string, key: string, type: NVSType, value: string | number | bigint | ArrayBuffer): Promise<boolean> {
         if (typeof type === "string") type = nvsTypeStringToNumber(type);
 
         assertString('namespace', namespace, 1, 16);
@@ -84,11 +108,13 @@ export class BadgeNVSApi {
         header.set(this.textEncoder.encode(key), 2 + namespace.length);
         header.set([type], 2 + namespace.length + key.length);
         let request = concatBuffers([header.buffer, this.encodeNVSData(type, value)]);
+
         let result = await this.transaction(BadgeUSB.PROTOCOL_COMMAND_CONFIGURATION_WRITE, request, 4000);
         return (new DataView(result).getUint8(0) == 1);
     }
 
-    async remove(namespace: string, key: string) {
+    /** @returns whether deleting the entry succeeded */
+    async delete(namespace: string, key: string): Promise<boolean> {
         assertString('key', key, 1, 16);
         assertString('namespace', namespace, 1, 16);
 
@@ -97,11 +123,20 @@ export class BadgeNVSApi {
         request.set(this.textEncoder.encode(namespace), 1);
         request.set([key.length], 1 + namespace.length);
         request.set(this.textEncoder.encode(key), 2 + namespace.length);
+
         let result = await this.transaction(BadgeUSB.PROTOCOL_COMMAND_CONFIGURATION_REMOVE, request.buffer, 4000);
         return (new DataView(result).getUint8(0) == 1);
     }
 
-    private decodeNVSData(type: NVSType, data: ArrayBuffer) {
+    private decodeNVSData(type: NVSType.String, data: ArrayBuffer): string | null
+    private decodeNVSData(type: NVSNumberType,  data: ArrayBuffer): number | null
+    private decodeNVSData(type: NVSBigintType,  data: ArrayBuffer): bigint | null
+    private decodeNVSData(type: NVSType.Blob,   data: ArrayBuffer): ArrayBuffer | null
+    private decodeNVSData(type: NVSType, data: ArrayBuffer): string | number | bigint | ArrayBuffer
+
+    private decodeNVSData(type: NVSType, data: ArrayBuffer): string | number | bigint | ArrayBuffer | null {
+        if (data.byteLength == 0) return null;
+
         let dataView = new DataView(data);
         if (type == 0x01) return dataView.getUint8(0);
         if (type == 0x11) return dataView.getInt8(0);
@@ -116,23 +151,29 @@ export class BadgeNVSApi {
         throw new Error("Invalid configuration type");
     }
 
-    private encodeNVSData(settingType: NVSType, data: number | bigint | string | ArrayBuffer) {
+    private encodeNVSData(type: NVSType.String, data: string):      ArrayBuffer
+    private encodeNVSData(type: NVSNumberType,  data: number):      ArrayBuffer
+    private encodeNVSData(type: NVSBigintType,  data: bigint):      ArrayBuffer
+    private encodeNVSData(type: NVSType.Blob,   data: ArrayBuffer): ArrayBuffer
+    private encodeNVSData(type: NVSType, data: string | number | bigint | ArrayBuffer): ArrayBuffer
+
+    private encodeNVSData(type: NVSType, data: string | number | bigint | ArrayBuffer): ArrayBuffer {
         function _assertNumber(_data: typeof data): asserts _data is number {
-            assertNumber(`Setting 0x${settingType.toString(0x10)}`, data);
+            assertNumber(`Setting 0x${type.toString(0x10)}`, data);
         }
         function _assertString(_data: typeof data): asserts _data is string {
-            assertString(`Setting 0x${settingType.toString(0x10)}`, data);
+            assertString(`Setting 0x${type.toString(0x10)}`, data);
         }
         function _assertBigint(_data: typeof data): asserts _data is bigint {
-            assertBigint(`Setting 0x${settingType.toString(0x10)}`, data);
+            assertBigint(`Setting 0x${type.toString(0x10)}`, data);
         }
         function _assertBuffer(_data: typeof data): asserts _data is ArrayBuffer {
-            assertInstanceOf(`Setting 0x${settingType.toString(0x10)}`, ArrayBuffer, data);
+            assertInstanceOf(`Setting 0x${type.toString(0x10)}`, ArrayBuffer, data);
         }
 
         let buffer: ArrayBuffer;
         let dataView: DataView;
-        switch (settingType) {
+        switch (type) {
         case NVSType.Uint8:
             _assertNumber(data);
             buffer = new ArrayBuffer(1);

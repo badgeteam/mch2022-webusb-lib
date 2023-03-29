@@ -1,3 +1,8 @@
+/**
+ * @author Renze Nicolai
+ * @author Reinier van der Leer
+ */
+
 import { crc32FromArrayBuffer } from "./lib/crc32";
 import { concatBuffers } from "./lib/buffers";
 
@@ -423,8 +428,8 @@ export class BadgeUSB {
 }
 
 type TransactionPromise = Promise<TransactionResponse> & {
-    resolve: (value: TransactionResponse | PromiseLike<TransactionResponse>) => void;
-    reject: (reason: TransactionResponse | Error) => void;
+    resolve: (value: TransactionResponse | PromiseLike<TransactionResponse>) => void,
+    reject: (reason: TransactionResponse | Error) => void,
     timeout?: number,
 };
 

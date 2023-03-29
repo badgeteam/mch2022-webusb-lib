@@ -1,9 +1,18 @@
-import { assertString, assertInstanceOf } from "../lib/assert";
+import { assertString, assertInstanceOf } from "../lib/assert-type";
 import { ProgressCallback } from "../badge-api";
 import { concatBuffers } from "../lib/buffers";
 import { BadgeUSB } from "../badge-usb";
 
-export class BadgeFilesystemAPI {
+export type FileListing = {
+    type: "dir" | "file",
+    name: string,
+    stat: {
+        size: number,
+        modified: bigint,
+    } | null
+}
+
+export class BadgeFileSystemApi {
     constructor(
         private transaction: BadgeUSB['transaction'],
     ) {}
@@ -11,11 +20,12 @@ export class BadgeFilesystemAPI {
     textEncoder = new TextEncoder();
     textDecoder = new TextDecoder();
 
-    async list(path: string) {
+    /** Lists entries in the folder given by `path` */
+    async list(path: string): Promise<FileListing[]> {
         let pathEncoded = this.textEncoder.encode(path);
         let data: ArrayBuffer = await this.transaction(BadgeUSB.PROTOCOL_COMMAND_FILESYSTEM_LIST, pathEncoded, 4000);
 
-        let result = [];
+        let result: FileListing[] = [];
         while (data.byteLength > 0) {
             let dataView = new DataView(data);
             let itemType = dataView.getUint8(0);
@@ -23,7 +33,7 @@ export class BadgeFilesystemAPI {
             let itemName = this.textDecoder.decode(data.slice(5, 5 + itemNameLength));
             data = data.slice(5 + itemNameLength);
             dataView = new DataView(data);
-            let stat = dataView.getInt32(0, true);
+            let stat = dataView.getInt32(0, true);  // only works for files
             let itemSize = dataView.getUint32(4, true);
             let itemModified = dataView.getBigUint64(8, true);
             data = data.slice(16);
@@ -39,27 +49,34 @@ export class BadgeFilesystemAPI {
         return result;
     }
 
-    async exists(path: string) {
+    /** @returns whether a file or folder exists at `path` */
+    async exists(path: string): Promise<boolean> {
         assertString('path', path);
 
         let result = await this.transaction(BadgeUSB.PROTOCOL_COMMAND_FILESYSTEM_EXISTS, this.textEncoder.encode(path), 4000);
         return (new DataView(result).getUint8(0) == 1);
     }
 
-    async mkdir(path: string) {
+    /**
+     * Creates a folder at the given `path`
+     * @returns whether the operation succeeded
+     */
+    async mkdir(path: string): Promise<boolean> {
         assertString('path', path);
 
         let result = await this.transaction(BadgeUSB.PROTOCOL_COMMAND_FILESYSTEM_CREATE_DIRECTORY, this.textEncoder.encode(path), 4000);
         return (new DataView(result).getUint8(0) == 1);
     }
 
-    async remove(path: string) {
+    /** @returns whether deleting the file/folder succeeded */
+    async delete(path: string): Promise<boolean> {
         assertString('path', path);
 
         let result = await this.transaction(BadgeUSB.PROTOCOL_COMMAND_FILESYSTEM_REMOVE, this.textEncoder.encode(path), 4000);
         return (new DataView(result).getUint8(0) == 1);
     }
 
+    /** @returns an object indicating the size and free space of the device's filesystems */
     async state() {
         let result = await this.transaction(BadgeUSB.PROTOCOL_COMMAND_FILESYSTEM_STATE, null, 4000);
         let dataView = new DataView(result);
@@ -79,11 +96,15 @@ export class BadgeFilesystemAPI {
         };
     }
 
-    async readFile(path: string) {
-        assertString('path', path);
+    /** @returns an `ArrayBuffer` containing the file's contents */
+    async readFile(filePath: string): Promise<ArrayBuffer> {
+        assertString('filePath', filePath);
 
-        let result = await this.transaction(BadgeUSB.PROTOCOL_COMMAND_FILESYSTEM_FILE_READ, this.textEncoder.encode(path), 4000);
-        if (new DataView(result).getUint8(0) !== 1) return null; // Failed to open file
+        let result = await this.transaction(BadgeUSB.PROTOCOL_COMMAND_FILESYSTEM_FILE_READ, this.textEncoder.encode(filePath), 4000);
+        if (new DataView(result).getUint8(0) !== 1) {
+            throw new Error(`Failed to open file '${filePath}'`);
+        }
+
         let parts = [];
         let requested_size = new ArrayBuffer(4);
         new DataView(requested_size).setUint32(0, 512, true);
@@ -96,15 +117,19 @@ export class BadgeFilesystemAPI {
         return concatBuffers(parts);
     }
 
-    async writeFile(path: string, data: ArrayBuffer, progressCallback?: ProgressCallback) {
-        assertString('path', path);
+    /** @returns whether the operation succeeded */
+    async writeFile(filePath: string, data: ArrayBuffer, progressCallback?: ProgressCallback) {
+        assertString('filePath', filePath);
         assertInstanceOf('data', ArrayBuffer, data);
 
         if (progressCallback) {
             progressCallback("Creating...", 0);
         }
-        let result = await this.transaction(BadgeUSB.PROTOCOL_COMMAND_FILESYSTEM_FILE_WRITE, this.textEncoder.encode(path), 4000);
-        if (new DataView(result).getUint8(0) !== 1) throw new Error("Failed to open file");
+        let result = await this.transaction(BadgeUSB.PROTOCOL_COMMAND_FILESYSTEM_FILE_WRITE, this.textEncoder.encode(filePath), 4000);
+        if (new DataView(result).getUint8(0) !== 1) {
+            throw new Error(`Failed to open file '${filePath}'`);
+        }
+
         let total = data.byteLength;
         let position = 0;
         while (data.byteLength > 0) {
@@ -126,7 +151,8 @@ export class BadgeFilesystemAPI {
         return (position == total);
     }
 
-    async closeFile() {
+    /** @returns whether the operation succeeded */
+    async closeFile(): Promise<boolean> {
         let result = await this.transaction(BadgeUSB.PROTOCOL_COMMAND_FILESYSTEM_FILE_CLOSE, null, 4000);
         return (new DataView(result).getUint8(0) == 1);
     }
