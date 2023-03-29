@@ -1,5 +1,5 @@
 {
-  "name": "@badgeteam/mch2022-webusb-lib",
+  "name": "@badge.team/badge-webusb",
   "version": "1.0.0",
   "description": "Web API for the Badge.team MCH2022 badge",
   "keywords": [
