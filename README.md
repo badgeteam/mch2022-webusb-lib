@@ -48,8 +48,8 @@ interface BadgeAPI {
 TODO: auto generated docs :)
 
 ## Credits
-* Renze Nicolai (@renzenicolai): WebUSB implementation (firmware + JS client)
-* Reinier van der Leer (@Pwuts): TypeScript conversion & documentation
+* Nicolai Electronics: initial WebUSB implementation (firmware + JS client)
+* Reinier van der Leer (@Pwuts): TypeScript conversion, documentation, improvements etc.
 
 ## References
 * [WebUSB implementation] in the MCH2022 badge firmware

@@ -1,5 +1,5 @@
 /**
- * @author Renze Nicolai
+ * @author Nicolai Electronics
  * @author Reinier van der Leer
  */
 

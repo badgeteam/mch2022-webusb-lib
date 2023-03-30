@@ -1,4 +1,4 @@
-/** @author Renze Nicolai */
+/** @author Nicolai Electronics */
 
 export function crc32FromArrayBuffer(input: ArrayBuffer): number {
     var table = new Uint32Array([
