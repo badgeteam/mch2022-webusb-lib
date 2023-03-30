@@ -18,6 +18,7 @@ export class BadgeAPI {
 
     async connect() {
         this.badge = await BadgeUSB.connect();
+        this.badge.onConnectionLost = () => delete this.badge;
     }
 
     async disconnect(reset = false) {
