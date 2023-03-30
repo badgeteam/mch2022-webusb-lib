@@ -19,6 +19,8 @@ export class BadgeAPI {
     async connect() {
         this.badge = await BadgeUSB.connect();
         this.badge.onConnectionLost = () => delete this.badge;
+
+        if (this._onConnectionLost) this._onConnectionLost();
     }
 
     async disconnect(reset = false) {
@@ -37,6 +39,12 @@ export class BadgeAPI {
         }
         badge.assertConnected();
     }
+
+    set onConnectionLost(callback: () => void) {
+        this._onConnectionLost = callback;
+    }
+
+    private _onConnectionLost?: () => void;
 
     async syncConnection(): Promise<void> {
         try {

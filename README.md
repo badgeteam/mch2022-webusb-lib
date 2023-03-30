@@ -14,7 +14,8 @@ interface BadgeAPI {
     syncConnection()
     assertConnected()
 
-    hasConnectedBadge
+    set onConnectionLost
+    get hasConnectedBadge
 
     transaction(cmd, payload, timeout)
 
