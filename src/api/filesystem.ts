@@ -20,8 +20,14 @@ export class BadgeFileSystemApi {
     textEncoder = new TextEncoder();
     textDecoder = new TextDecoder();
 
-    /** Lists entries in the folder given by `path` */
-    async list(path: string): Promise<FileListing[]> {
+    /**
+     * Lists entries in the folder given by `path`
+     * @param path default: `/internal`
+     */
+    async list(path: string = '/internal'): Promise<FileListing[]> {
+        if (path == '') {
+            throw Error('Path must not be empty');
+        }
         let pathEncoded = this.textEncoder.encode(path);
         let data: ArrayBuffer = await this.transaction(BadgeUSB.PROTOCOL_COMMAND_FILESYSTEM_LIST, pathEncoded, 4000);
 

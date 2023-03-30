@@ -471,7 +471,7 @@ export class BadgeUSB {
                 dataView, identifier, magic,
                 type: responseType,
                 payload: {
-                    buffer,
+                    buffer: payload,
                     crc: payloadCRC,
                     declaredLength: payloadLength,
                 },
@@ -484,6 +484,8 @@ export class BadgeUSB {
         }
     }
 }
+
+export type TransactionArgs = Parameters<BadgeUSB['transaction']>;
 
 class TransactionPromise extends Promise<TransactionResponse> {
     resolve: (value: TransactionResponse | PromiseLike<TransactionResponse>) => void;

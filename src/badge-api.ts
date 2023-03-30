@@ -3,10 +3,10 @@
  * @author Reinier van der Leer
  */
 
+import { BadgeUSB, TransactionArgs } from "./badge-usb";
 import { BadgeFileSystemApi } from "./api/filesystem";
 import { BadgeAppFSApi } from "./api/appfs";
 import { BadgeNVSApi } from "./api/nvs";
-import { BadgeUSB } from "./badge-usb";
 
 export type ProgressCallback = (status: string, progressPercent: number) => void;
 
@@ -54,15 +54,19 @@ export class BadgeAPI {
 
 
     /*** Filesystem API ***/
-    public fileSystem = new BadgeFileSystemApi(this.transaction);
+    public fileSystem = new BadgeFileSystemApi(
+        (...args: TransactionArgs) => this.transaction(...args),
+    );
 
     /*** AppFS API ***/
     public appFS = new BadgeAppFSApi(
         this.fileSystem,
         this.disconnect,
-        this.transaction,
+        (...args: TransactionArgs) => this.transaction(...args),
     );
 
     /*** NVS API */
-    public nvs = new BadgeNVSApi(this.transaction);
+    public nvs = new BadgeNVSApi(
+        (...args: TransactionArgs) => this.transaction(...args),
+    );
 }
