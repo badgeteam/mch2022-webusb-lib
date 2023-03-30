@@ -222,7 +222,7 @@ export class BadgeUSB {
     }
 
     async transaction(command: number, payload: ArrayBuffer | null, timeout = 0): Promise<ArrayBuffer> {
-        let transaction: TransactionPromise = createTransactionPromise();
+        let transaction = new TransactionPromise();
         let identifier = this.nextTransactionID;
         this.nextTransactionID = (this.nextTransactionID + 1) & 0xFFFFFFFF;
         this.transactionPromises[identifier] = transaction;
@@ -427,25 +427,24 @@ export class BadgeUSB {
     }
 }
 
-type TransactionPromise = Promise<TransactionResponse> & {
-    resolve: (value: TransactionResponse | PromiseLike<TransactionResponse>) => void,
-    reject: (reason: TransactionResponse | Error) => void,
-    timeout?: number,
-};
+class TransactionPromise extends Promise<TransactionResponse> {
+    resolve: (value: TransactionResponse | PromiseLike<TransactionResponse>) => void;
+    reject: (reason: TransactionResponse | Error) => void;
 
-function createTransactionPromise(): TransactionPromise {
-    let promiseResolve: TransactionPromise['resolve'];
-    let promiseReject: TransactionPromise['reject'];
-    let promise = new Promise<TransactionResponse>((resolve, reject) => {
-        promiseResolve = resolve;
-        promiseReject = reject;
-    });
-    return {
-        ...promise,
-        resolve: promiseResolve!,
-        reject: promiseReject!,
-    };
-}
+    timeout?: number;
+
+    constructor() {
+        let resolver: (value: TransactionResponse | PromiseLike<TransactionResponse>) => void;
+        let rejector: (reason: TransactionResponse | Error) => void;
+
+        super((resolve, reject) => {
+            resolver = resolve;
+            rejector = reject;
+        });
+        this.resolve = resolver!;
+        this.reject = rejector!;
+    }
+};
 
 export type TransactionResponse = Readonly<{
     identifier: number,
