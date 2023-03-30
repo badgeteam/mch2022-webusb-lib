@@ -109,7 +109,7 @@ export class BadgeUSB {
             await badge.controlReset(false);
         }
 
-        await badge._listen();
+        badge._listen();
 
         let protocolVersion: number | undefined;
         while (protocolVersion == undefined) {
