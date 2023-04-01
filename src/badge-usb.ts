@@ -5,6 +5,7 @@
 
 import { crc32FromArrayBuffer } from "./lib/crc32";
 import { concatBuffers } from "./lib/buffers";
+import DeferredPromise from "./lib/deferred-promise";
 import FancyError from "fancy-error";
 
 export enum BadgeUSBState {
@@ -321,8 +322,7 @@ export class BadgeUSB {
             response = await transaction;
         } catch (error) {
             if (error instanceof TimeoutError) throw error;
-
-            throw new RXError(`Transaction ${transactionID} (${commandCode}) failed`, transaction.callStack, error);
+            throw new RXError(`Transaction ${transactionID} (${commandCode}) failed`, error, undefined, false);
         }
         console.debug('finshed transaction', transactionID, `(${commandCode})`);
 
@@ -493,7 +493,7 @@ export class BadgeUSB {
                     }
                     try {
                         transaction.reject({
-                            error: new RXError("CRC verification of received packet failed", transaction.callStack),
+                            error: transaction.amendError(new RXError("CRC verification of received packet failed")),
 
                             dataView, identifier, magic,
                             type:     responseType,
@@ -562,28 +562,8 @@ export type TransactionResponse = Readonly<{
     error?: Error,
 }>;
 
-class TransactionPromise extends Promise<TransactionResponse> {
-    resolve: (value: TransactionResponse | PromiseLike<TransactionResponse>) => void;
-    reject: (reason: TransactionResponse | Error) => void;
-
-    callStack: Error['stack'];
+class TransactionPromise extends DeferredPromise<TransactionResponse> {
     timeout?: number;
-
-    constructor(executor: ConstructorParameters<typeof Promise<TransactionResponse>>[0] = () => {}) {
-        let resolver: (value: TransactionResponse | PromiseLike<TransactionResponse>) => void;
-        let rejector: (reason: TransactionResponse | Error) => void;
-
-        super((resolve, reject) => {
-            resolver = resolve;
-            rejector = reject;
-            return executor(resolve, reject);   // Promise magic: this line is essential but idk why
-        });
-
-        this.resolve = resolver!;
-        this.reject = rejector!;
-
-        this.callStack = Error().stack?.split('\n').slice(2).join('\n');
-    }
 };
 
 export class BadgeUSBError extends FancyError {
@@ -610,10 +590,5 @@ export class BadgeUSBError extends FancyError {
     }
 }
 
-class RXError extends FancyError {
-    constructor(message: string, stack?: Error['stack'], child?: Error, context?: object) {
-        super(message, child, context, false);
-        if (stack) this.stack = stack;
-    }
-}
+class RXError extends FancyError {}
 class TimeoutError extends FancyError {}
