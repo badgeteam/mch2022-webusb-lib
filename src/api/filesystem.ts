@@ -4,8 +4,9 @@ import { concatBuffers } from "../lib/buffers";
 import { BadgeUSB } from "../badge-usb";
 
 export type FileListing = {
-    type: "dir" | "file",
     name: string,
+    path: string,
+    type: "dir" | "file",
     stat: {
         size: number,
         modified: bigint,
@@ -44,8 +45,9 @@ export class BadgeFileSystemApi {
             let itemModified = dataView.getBigUint64(8, true);
             data = data.slice(16);
             result.push({
-                type: itemType === 2 ? "dir" : "file",
                 name: itemName,
+                path: `${path}/${itemName}`,
+                type: itemType === 2 ? "dir" : "file",
                 stat: stat === 0 ? {
                     size: itemSize,
                     modified: itemModified
