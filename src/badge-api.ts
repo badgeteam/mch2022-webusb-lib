@@ -3,10 +3,11 @@
  * @author Reinier van der Leer
  */
 
-import { BadgeUSB, TransactionArgs } from "./badge-usb";
-import { BadgeFileSystemApi } from "./api/filesystem";
-import { BadgeAppFSApi } from "./api/appfs";
+import { BadgeUSB } from "./badge-usb";
 import { BadgeNVSApi } from "./api/nvs";
+import { BadgeAppFSApi } from "./api/appfs";
+import { BadgeFileSystemApi } from "./api/filesystem";
+
 
 export type ProgressCallback = (status: string, progressPercent: number) => void;
 
@@ -16,11 +17,16 @@ export class BadgeAPI {
     textEncoder = new TextEncoder();
     textDecoder = new TextDecoder();
 
-    async connect() {
+    async connect(): Promise<boolean> {
         this.badge = await BadgeUSB.connect();
-        this.badge.onConnectionLost = () => delete this.badge;
+        this.badge.onConnectionLost = (err?: Error) => {
+            delete this.badge;
+            this._onConnectionLost.forEach(cb => { try { cb() } catch (e) {} });
+        }
 
-        if (this._onConnectionLost) this._onConnectionLost();
+        this._onConnect.forEach(cb => { try { cb(this) } catch (e) {} });
+
+        return true;
     }
 
     async disconnect(reset = false) {
@@ -40,11 +46,16 @@ export class BadgeAPI {
         badge.assertConnected();
     }
 
-    set onConnectionLost(callback: () => void) {
-        this._onConnectionLost = callback;
+    private _onConnect: ((api: BadgeAPI) => void)[] = [];
+    private _onConnectionLost:  (() => void)[] = [];
+
+    onConnect(callback: (api: BadgeAPI) => void) {
+        this._onConnect.push(callback);
     }
 
-    private _onConnectionLost?: () => void;
+    onConnectionLost(callback: (err?: Error) => void) {
+        this._onConnectionLost.push(callback);
+    }
 
     async syncConnection(): Promise<void> {
         try {
@@ -63,18 +74,18 @@ export class BadgeAPI {
 
     /*** Filesystem API ***/
     public fileSystem = new BadgeFileSystemApi(
-        (...args: TransactionArgs) => this.transaction(...args),
+        this.transaction.bind(this),
     );
 
     /*** AppFS API ***/
     public appFS = new BadgeAppFSApi(
         this.fileSystem,
-        this.disconnect,
-        (...args: TransactionArgs) => this.transaction(...args),
+        this.disconnect.bind(this),
+        this.transaction.bind(this),
     );
 
     /*** NVS API */
     public nvs = new BadgeNVSApi(
-        (...args: TransactionArgs) => this.transaction(...args),
+        this.transaction.bind(this),
     );
 }

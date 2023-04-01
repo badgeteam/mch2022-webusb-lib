@@ -5,6 +5,7 @@
 
 import { crc32FromArrayBuffer } from "./lib/crc32";
 import { concatBuffers } from "./lib/buffers";
+import FancyError from "fancy-error";
 
 export enum BadgeUSBState {
     CDC    = 0x00,
@@ -58,15 +59,6 @@ export class BadgeUSB {
     static readonly PROTOCOL_COMMAND_CONFIGURATION_READ          = new DataView(this.textEncoder.encode("NVSR").buffer).getUint32(0, true);
     static readonly PROTOCOL_COMMAND_CONFIGURATION_WRITE         = new DataView(this.textEncoder.encode("NVSW").buffer).getUint32(0, true);
     static readonly PROTOCOL_COMMAND_CONFIGURATION_REMOVE        = new DataView(this.textEncoder.encode("NVSD").buffer).getUint32(0, true);
-
-    dataBuffer = new ArrayBuffer(0);
-
-    inSync = false;
-    nextTransactionID: number = 0;
-    transactionPromises: { [key: number]: TransactionPromise } = {};
-
-    _onConnectionLost?: () => void;
-    _onDisconnect?: () => void;
 
     private listening = false;
     private connected = false;
@@ -135,7 +127,7 @@ export class BadgeUSB {
 
         console.timeEnd('Connecting: bus synchronized');
         console.debug(`Connecting: bus synchronized in ${n} attempts`);
-        console.debug(`Protocol version: ${protocolVersion}`);
+        console.debug('Protocol version:', protocolVersion);
 
         if (protocolVersion < 2) {
             throw new Error("Protocol version not supported");
@@ -183,7 +175,10 @@ export class BadgeUSB {
         if (this._onDisconnect) this._onDisconnect();
     }
 
-    set onConnectionLost(callback: () => void) {
+    private _onConnectionLost?: (err?: Error) => void;
+    private _onDisconnect?: () => void;
+
+    set onConnectionLost(callback: (err?: Error) => void) {
         this._onConnectionLost = callback;
     }
 
@@ -193,11 +188,12 @@ export class BadgeUSB {
 
     get connectionStats() {
         return {
-            rxPackets: this.rxPacketCount,
             txPackets: this.txPacketCount,
-            timesOutOfSync: this.resyncCount,
+            rxPackets: this.rxPacketCount,
+            crcErrors: this.crcMismatchCount,
             transactions: this.nextTransactionID,
-            pendingTransactions: Object.keys(this.transactionPromises).length,
+            timesOutOfSync: this.resyncCount,
+            pendingTransactions: this.pendingTransactionCount,
         };
     }
 
@@ -245,6 +241,7 @@ export class BadgeUSB {
         return result.getUint8(0);
     }
 
+    private inSync = false;
     /**
      * @returns the protocol version number
      * @throws an error if sync fails
@@ -270,29 +267,76 @@ export class BadgeUSB {
         }
     }
 
+    private nextTransactionID: number = 0;
+    private queuedTransactionIDs: number[] = [];
+    private pendingTransactions: { [key: number]: TransactionPromise } = {};
     async transaction(command: number, payload: ArrayBuffer | null, timeout = 0): Promise<ArrayBuffer> {
-        let transaction = new TransactionPromise();
-        let identifier = this.nextTransactionID;
+        const transaction = new TransactionPromise();
+        const commandCode = this._decodeUint32AsString(command);
+        const transactionID = this.nextTransactionID;
         this.nextTransactionID = (this.nextTransactionID + 1) & 0xFFFFFFFF;
-        this.transactionPromises[identifier] = transaction;
+        this.queuedTransactionIDs.push(transactionID);
+
+        console.debug(
+            `queued transaction`, transactionID, `(${commandCode});`,
+            'queue:', this.queuedTransactionIDs
+        );
+
+        let nextInLine: boolean;
+        do {
+            // wait for pending transactions to finish
+            nextInLine = transactionID == this.queuedTransactionIDs[0];
+
+            if (this.pendingTransactionCount > 0) {
+                await Promise.all(Object.values(this.pendingTransactions)).catch(() => {}); // mitigate transaction bursts
+            }
+        } while (!nextInLine)
+
+        this.pendingTransactions[transactionID] = transaction;
+        this.queuedTransactionIDs.shift();
+        console.debug('started transaction', transactionID, `(${commandCode}); queue:`, this.queuedTransactionIDs);
 
         if (timeout > 0) {
+            const error = new TimeoutError(
+                `${commandCode} with ID ${transactionID} timed out after ${timeout} ms`
+            );
             transaction.timeout = setTimeout(() => {
-                transaction.reject(new Error("timeout"));
-                delete this.transactionPromises[identifier];
+                try {
+                    transaction.reject(error);
+                } catch (error) {
+                    if (!(error instanceof TimeoutError)) throw error;
+                }
+                console.debug(error);
+                if (payload) console.debug(`payload for failed ${commandCode}:`, payload, BadgeUSB.textDecoder.decode(payload));
+
+                delete this.pendingTransactions[transactionID];
                 this.inSync = false;
             }, timeout);
         }
 
-        await this._sendPacket(identifier, command, payload);
+        await this._sendPacket(transactionID, command, payload);
 
-        const response = await transaction;
+        let response: TransactionResponse;
+        try {
+            response = await transaction;
+        } catch (error) {
+            if (error instanceof TimeoutError) throw error;
+
+            throw new RXError(`Transaction ${transactionID} (${commandCode}) failed`, transaction.callStack, error);
+        }
+        console.debug('finshed transaction', transactionID, `(${commandCode})`);
+
         if (response.type !== command) {
-            console.error("Badge reports error " + response.responseText);
-            throw new Error("Error response " + response.responseText);
+            let error = new BadgeUSBError(response.typeCode);
+            console.warn(error);
+            throw error;
         }
         return response.payload.buffer;
     }
+
+    get pendingTransactionCount() {
+        return Object.keys(this.pendingTransactions).length;
+    };
 
 
     private static _getInterface(device: USBDevice, index: number): USBInterface {
@@ -338,7 +382,7 @@ export class BadgeUSB {
             console.warn('Connection lost. If this was not intentional, try reconnecting.');
 
             this.listening = false;
-            if (this._onConnectionLost) this._onConnectionLost();
+            if (this._onConnectionLost) this._onConnectionLost(error);
         }
     }
 
@@ -368,7 +412,7 @@ export class BadgeUSB {
         }, length);
 
         if (!result.data) {
-            throw new Error("Control request failed: no data received");
+            throw new RXError("Control request failed: no data received");
         }
         return result.data;
     }
@@ -380,7 +424,7 @@ export class BadgeUSB {
     private async _dataTransferIn(length = 64) {
         let result = await this.device.transferIn(this.endpoints.in.endpointNumber, length);//20 + 8192);
         if (!result.data) {
-            throw new Error("Data request failed: no data received");
+            throw new RXError("Data transfer failed: no data received");
         }
         return result.data;
     }
@@ -403,6 +447,7 @@ export class BadgeUSB {
         this.txPacketCount++;
     }
 
+    private dataBuffer = new ArrayBuffer(0);
     private async _handleData(buffer: ArrayBuffer) {
         this.dataBuffer = concatBuffers([this.dataBuffer, buffer]);
 
@@ -418,7 +463,7 @@ export class BadgeUSB {
                     return; // Wait for more data
                 }
             } else {
-                this.dataBuffer = this.dataBuffer.slice(1); // Shift buffer
+                this.dataBuffer = this.dataBuffer.slice(1); // No magic -> discard first byte
             }
         }
     }
@@ -430,6 +475,7 @@ export class BadgeUSB {
         let magic = dataView.getUint32(0, true);
         let identifier = dataView.getUint32(4, true);
         let responseType = dataView.getUint32(8, true);
+        let responseTypeCode = this._decodeUint32AsString(responseType);
         let payloadLength = dataView.getUint32(12, true);
         let payloadCRC = dataView.getUint32(16, true);
 
@@ -439,58 +485,88 @@ export class BadgeUSB {
             if (crc32FromArrayBuffer(payload) !== payloadCRC) {
                 console.debug('CRC mismatch; mismatches so far:', ++this.crcMismatchCount);
 
-                if (identifier in this.transactionPromises) {
-                    if (this.transactionPromises[identifier].timeout !== null) {
-                        clearTimeout(this.transactionPromises[identifier].timeout);
-                    }
-                    this.transactionPromises[identifier].reject({
-                        error: new Error("CRC"),
+                if (identifier in this.pendingTransactions) {
+                    const transaction = this.pendingTransactions[identifier];
 
-                        dataView, identifier, magic,
-                        type: responseType,
-                        payload: {
-                            buffer: payload,
-                            crc: payloadCRC,
-                            declaredLength: payloadLength,
-                        },
-                        responseText: BadgeUSB.textDecoder.decode(new Uint8Array(buffer.slice(8,12))),
-                    });
-                    delete this.transactionPromises[identifier];
+                    if (transaction !== null) {
+                        clearTimeout(transaction.timeout);
+                    }
+                    try {
+                        transaction.reject({
+                            error: new RXError("CRC verification of received packet failed", transaction.callStack),
+
+                            dataView, identifier, magic,
+                            type:     responseType,
+                            typeCode: responseTypeCode,
+                            payload: {
+                                buffer: payload,
+                                crc: payloadCRC,
+                                declaredLength: payloadLength,
+                            },
+                        });
+                    } catch (error) {
+                        if (!(error instanceof RXError)) throw error;
+                    }
+                    delete this.pendingTransactions[identifier];
                 } else {
-                    console.error("Found no transaction for", identifier, responseType);
+                    console.error("Found no transaction for", identifier, responseTypeCode);
                 }
                 return;
             }
         }
 
-        if (identifier in this.transactionPromises) {
-            if (this.transactionPromises[identifier].timeout !== null) {
-                clearTimeout(this.transactionPromises[identifier].timeout);
+        if (identifier in this.pendingTransactions) {
+            if (this.pendingTransactions[identifier].timeout !== null) {
+                clearTimeout(this.pendingTransactions[identifier].timeout);
             }
-            this.transactionPromises[identifier].resolve({
+            this.pendingTransactions[identifier].resolve({
                 dataView, identifier, magic,
-                type: responseType,
+                type:     responseType,
+                typeCode: responseTypeCode,
                 payload: {
                     buffer: payload,
                     crc: payloadCRC,
                     declaredLength: payloadLength,
                 },
-                responseText: BadgeUSB.textDecoder.decode(new Uint8Array(buffer.slice(8,12))),
             });
-            delete this.transactionPromises[identifier];
+            delete this.pendingTransactions[identifier];
             this.rxPacketCount++;
         } else {
             console.error("Found no transaction for", identifier, responseType);
         }
     }
+
+    private _decodeUint32AsString(cmd: number): string {
+        const buffer = new ArrayBuffer(4);
+        const dataView = new DataView(buffer);
+        dataView.setUint32(0, cmd, true);
+        return BadgeUSB.textDecoder.decode(new Uint8Array(buffer));
+    }
 }
 
 export type TransactionArgs = Parameters<BadgeUSB['transaction']>;
+
+export type TransactionResponse = Readonly<{
+    identifier: number,
+    dataView: DataView,
+    magic: number,
+    type: number,   // command
+    typeCode: string,
+
+    payload: Readonly<{
+        crc: number,
+        buffer: ArrayBuffer,
+        declaredLength: number,
+    }>,
+
+    error?: Error,
+}>;
 
 class TransactionPromise extends Promise<TransactionResponse> {
     resolve: (value: TransactionResponse | PromiseLike<TransactionResponse>) => void;
     reject: (reason: TransactionResponse | Error) => void;
 
+    callStack: Error['stack'];
     timeout?: number;
 
     constructor(executor: ConstructorParameters<typeof Promise<TransactionResponse>>[0] = () => {}) {
@@ -505,21 +581,39 @@ class TransactionPromise extends Promise<TransactionResponse> {
 
         this.resolve = resolver!;
         this.reject = rejector!;
+
+        this.callStack = Error().stack?.split('\n').slice(2).join('\n');
     }
 };
 
-export type TransactionResponse = Readonly<{
-    identifier: number,
-    dataView: DataView,
-    type: number,   // command
-    magic: number,
-    responseText: String,
+export class BadgeUSBError extends FancyError {
+    static readonly codeMap: { [c: string]: string } = {
+        'ERR1': "Declared payload length of received packet exceeds max payload size",
+        'ERR2': "CRC verification of received payload failed",
+        'ERR3': "Unknown command",
+        'ERR4': "Out of memory",
+        'ERR5': "No such file or directory",
+        'ERR6': "No file open",
+        'ERR7': "Data sent while reading",
+        'ERR8': "Cannot allocate app",
+        'ERR9': "Payload length out of bounds",
+        'ERRA': "Text parameter 1 out of bounds",
+        'ERRB': "Text parameter 2 out of bounds",
+        'ERRC': "Response length exceeds max payload size",
+    };
 
-    payload: Readonly<{
-        crc: number,
-        buffer: ArrayBuffer,
-        declaredLength: number,
-    }>,
+    readonly code: string;
 
-    error?: Error,
-}>;
+    constructor(errorCode: string) {
+        super("Badge returned error: " + (BadgeUSBError.codeMap[errorCode] ?? `${errorCode} (unknown error code)`));
+        this.code = errorCode;
+    }
+}
+
+class RXError extends FancyError {
+    constructor(message: string, stack?: Error['stack'], child?: Error, context?: object) {
+        super(message, child, context, false);
+        if (stack) this.stack = stack;
+    }
+}
+class TimeoutError extends FancyError {}

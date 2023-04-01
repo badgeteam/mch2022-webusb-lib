@@ -7,6 +7,11 @@
   resolved "https://registry.yarnpkg.com/@types/w3c-web-usb/-/w3c-web-usb-1.0.6.tgz#5d8560d0d9f585ffc80865bc773db7bc975b680c"
   integrity sha512-cSjhgrr8g4KbPnnijAr/KJDNKa/bBa+ixYkywFRvrhvi9n1WEl7yYbtRyzE6jqNQiSxxJxoAW3STaOQwJHndaw==
 
+fancy-error@^1.0.0:
+  version "1.0.0"
+  resolved "https://registry.yarnpkg.com/fancy-error/-/fancy-error-1.0.0.tgz#ad7ebdfb4dc3cd9790e2eba674171ab01be347cf"
+  integrity sha512-lwXHsYZHMRerD8jRICYXjRe8P1tZPgiFfgKwE4WNwA1eKpHFYycVzJN4/6GaiUR+Je3m55T5tFfM4bNZL/0m6w==
+
 "typescript@>=4.5.0 <6.0.0":
   version "5.0.2"
   resolved "https://registry.yarnpkg.com/typescript/-/typescript-5.0.2.tgz#891e1a90c5189d8506af64b9ef929fca99ba1ee5"
