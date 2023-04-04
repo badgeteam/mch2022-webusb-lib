@@ -61,12 +61,12 @@ export class BadgeUSB {
     static readonly PROTOCOL_COMMAND_CONFIGURATION_WRITE         = new DataView(this.textEncoder.encode("NVSW").buffer).getUint32(0, true);
     static readonly PROTOCOL_COMMAND_CONFIGURATION_REMOVE        = new DataView(this.textEncoder.encode("NVSD").buffer).getUint32(0, true);
 
-    private listening = false;
-    private connected = false;
-    private debug = {
+    public debug = {
         rx: false,
         tx: false,
     };
+    private listening = false;
+    private connected = false;
 
     constructor(
         private device: USBDevice,
