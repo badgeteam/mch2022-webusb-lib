@@ -18,7 +18,7 @@ export function assertString(varName: string, value: any, minLength = 0, maxLeng
 
 export function assertInstanceOf(type: Function, varName: string, value: any): asserts value is typeof type {
     if (!(value instanceof type))
-    throw _typeError(varName, _typeName(type), value);
+    throw _typeError(varName, type.name, value);
 }
 
 function _typeError(varName: string, requiredType: string, value: any): TypeError {
