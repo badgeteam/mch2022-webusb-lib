@@ -63,6 +63,10 @@ export class BadgeUSB {
 
     private listening = false;
     private connected = false;
+    private debug = {
+        rx: false,
+        tx: false,
+    };
 
     constructor(
         private device: USBDevice,
@@ -430,17 +434,18 @@ export class BadgeUSB {
     }
 
     private txPacketCount = 0;
-    private async _sendPacket(identifier: number, command: number, payload: ArrayBuffer | null = null) {
-        if (payload === null) payload = new ArrayBuffer(0);
+    private async _sendPacket(id: number, command: number, payload: ArrayBuffer | null = null) {
+        payload ??= new ArrayBuffer(0);
 
         let header = new ArrayBuffer(20);
         let dataView = new DataView(header);
         dataView.setUint32(0, BadgeUSB.PROTOCOL_MAGIC, true);
-        dataView.setUint32(4, identifier, true);
+        dataView.setUint32(4, id, true);
         dataView.setUint32(8, command, true);
         dataView.setUint32(12, payload.byteLength, true);
         dataView.setUint32(16, payload.byteLength > 0 ? crc32FromArrayBuffer(payload) : 0, true);
 
+        if (this.debug.tx) console.debug(`TX packet ${id}:`, { header, payload });
         let packet = concatBuffers([header, payload]);
         await this._dataTransferOut(packet);
 
@@ -449,7 +454,9 @@ export class BadgeUSB {
 
     private dataBuffer = new ArrayBuffer(0);
     private async _handleData(buffer: ArrayBuffer) {
+        if (this.debug.rx) console.debug('RX data:', buffer);
         this.dataBuffer = concatBuffers([this.dataBuffer, buffer]);
+        if (this.debug.rx) console.debug('RX buffer:', this.dataBuffer.slice(0));
 
         while (this.dataBuffer.byteLength >= 20) {
             let dataView = new DataView(this.dataBuffer);
@@ -463,6 +470,7 @@ export class BadgeUSB {
                     return; // Wait for more data
                 }
             } else {
+                if (this.debug.rx) console.debug(`RX: discarding non-magic byte 0x${magic.toString(16)}`);
                 this.dataBuffer = this.dataBuffer.slice(1); // No magic -> discard first byte
             }
         }
@@ -473,29 +481,37 @@ export class BadgeUSB {
     private async _handlePacket(buffer: ArrayBuffer) {
         let dataView = new DataView(buffer);
         let magic = dataView.getUint32(0, true);
-        let identifier = dataView.getUint32(4, true);
+        let id    = dataView.getUint32(4, true);
         let responseType = dataView.getUint32(8, true);
         let responseTypeCode = this._decodeUint32AsString(responseType);
         let payloadLength = dataView.getUint32(12, true);
         let payloadCRC = dataView.getUint32(16, true);
+        if (this.debug.rx) console.debug('RX packet', id, 'header:', {
+            id, type: responseTypeCode,
+            payloadLength, payloadCRC,
+            magic: magic.toString(16),
+            buffer: buffer.slice(0, 20),
+        });
 
         let payload = new ArrayBuffer(0);
         if (payloadLength > 0) {
             payload = buffer.slice(20);
-            if (crc32FromArrayBuffer(payload) !== payloadCRC) {
-                console.debug('CRC mismatch; mismatches so far:', ++this.crcMismatchCount);
+            if (this.debug.rx) console.debug('RX packet', id, 'payload:', payload.slice(0));
 
-                if (identifier in this.pendingTransactions) {
-                    const transaction = this.pendingTransactions[identifier];
+            if (crc32FromArrayBuffer(payload) !== payloadCRC) {
+                console.debug('RX CRC mismatch; mismatches so far:', ++this.crcMismatchCount);
+
+                if (id in this.pendingTransactions) {
+                    const transaction = this.pendingTransactions[id];
 
                     if (transaction !== null) {
                         clearTimeout(transaction.timeout);
                     }
                     try {
                         transaction.reject({
-                            error: transaction.amendError(new RXError("CRC verification of received packet failed")),
+                            error: transaction.amendError(new RXError("CRC verification of RX packet failed")),
 
-                            dataView, identifier, magic,
+                            id, dataView, magic,
                             type:     responseType,
                             typeCode: responseTypeCode,
                             payload: {
@@ -507,20 +523,18 @@ export class BadgeUSB {
                     } catch (error) {
                         if (!(error instanceof RXError)) throw error;
                     }
-                    delete this.pendingTransactions[identifier];
+                    delete this.pendingTransactions[id];
                 } else {
-                    console.error("Found no transaction for", identifier, responseTypeCode);
+                    console.error("Found no transaction for", id, responseTypeCode);
                 }
                 return;
             }
         }
 
-        if (identifier in this.pendingTransactions) {
-            if (this.pendingTransactions[identifier].timeout !== null) {
-                clearTimeout(this.pendingTransactions[identifier].timeout);
-            }
-            this.pendingTransactions[identifier].resolve({
-                dataView, identifier, magic,
+        if (id in this.pendingTransactions) {
+            clearTimeout(this.pendingTransactions[id].timeout);
+            this.pendingTransactions[id].resolve({
+                id, dataView, magic,
                 type:     responseType,
                 typeCode: responseTypeCode,
                 payload: {
@@ -529,10 +543,10 @@ export class BadgeUSB {
                     declaredLength: payloadLength,
                 },
             });
-            delete this.pendingTransactions[identifier];
+            delete this.pendingTransactions[id];
             this.rxPacketCount++;
         } else {
-            console.error("Found no transaction for", identifier, responseType);
+            console.error("Found no transaction for", id, responseType);
         }
     }
 
@@ -547,7 +561,7 @@ export class BadgeUSB {
 export type TransactionArgs = Parameters<BadgeUSB['transaction']>;
 
 export type TransactionResponse = Readonly<{
-    identifier: number,
+    id: number,
     dataView: DataView,
     magic: number,
     type: number,   // command
