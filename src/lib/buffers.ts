@@ -1,4 +1,4 @@
-export function concatBuffers(buffers: ArrayBuffer[] = []) {
+export function concatBuffers(...buffers: ArrayBuffer[]) {
     let total_length = 0;
     for (let i = 0; i < buffers.length; i++) {
         total_length += buffers[i].byteLength;

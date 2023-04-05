@@ -30,31 +30,29 @@ export class BadgeNVSApi {
      * Lists the settings in the given `namespace`
      * @param namespace default: `''` (root namespace)
      */
-    async list(namespace = "") {
+    async list(namespace = '') {
         assertString('namespace', namespace);
+        const namespaceEncoded = this.textEncoder.encode(namespace);
 
-        let namespaceEncoded = this.textEncoder.encode(namespace);
         let data = await this.transaction(BadgeUSB.PROTOCOL_COMMAND_CONFIGURATION_LIST, namespaceEncoded, 4000);
         let result = [];
         while (data.byteLength > 0) {
             let dataView = new DataView(data);
-            let namespace_length = dataView.getUint16(0, true);
-            let namespace = this.textDecoder.decode(data.slice(2, 2 + namespace_length));
-            data = data.slice(2 + namespace_length);
+            let namespaceLength = dataView.getUint16(0, true);
+            let namespace       = this.textDecoder.decode(data.slice(2, 2 + namespaceLength));
+            data = data.slice(2 + namespaceLength);
+
             dataView = new DataView(data);
-            let key_length = dataView.getUint16(0, true);
-            let key = this.textDecoder.decode(data.slice(2, 2 + key_length));
-            data = data.slice(2 + key_length);
+            let keyLength = dataView.getUint16(0, true);
+            let key       = this.textDecoder.decode(data.slice(2, 2 + keyLength));
+            data = data.slice(2 + keyLength);
+
             dataView = new DataView(data);
             let type = dataView.getUint8(0);
             let size = dataView.getUint32(0, true);
             data = data.slice(5);
-            result.push({
-                namespace: namespace,
-                key: key,
-                type: type,
-                size: size
-            });
+
+            result.push({ namespace, key, type, size });
         }
         return result;
     }
@@ -102,12 +100,12 @@ export class BadgeNVSApi {
         assertNumber('type', type);
 
         let header = new Uint8Array(3 + namespace.length + key.length);
-        header.set([namespace.length], 0);
-        header.set(this.textEncoder.encode(namespace), 1);
-        header.set([key.length], 1 + namespace.length);
-        header.set(this.textEncoder.encode(key), 2 + namespace.length);
-        header.set([type], 2 + namespace.length + key.length);
-        let request = concatBuffers([header.buffer, this.encodeNVSData(type, value)]);
+        header.set([namespace.length],                  0);
+        header.set(this.textEncoder.encode(namespace),  1);
+        header.set([key.length],                        1 + namespace.length);
+        header.set(this.textEncoder.encode(key),        2 + namespace.length);
+        header.set([type],                              2 + namespace.length + key.length);
+        const request = concatBuffers(header.buffer, this.encodeNVSData(type, value));
 
         let result = await this.transaction(BadgeUSB.PROTOCOL_COMMAND_CONFIGURATION_WRITE, request, 4000);
         return (new DataView(result).getUint8(0) == 1);
@@ -119,12 +117,12 @@ export class BadgeNVSApi {
         assertString('namespace', namespace, 1, 16);
 
         let request = new Uint8Array(2 + namespace.length + key.length);
-        request.set([namespace.length], 0);
+        request.set([namespace.length],                 0);
         request.set(this.textEncoder.encode(namespace), 1);
-        request.set([key.length], 1 + namespace.length);
-        request.set(this.textEncoder.encode(key), 2 + namespace.length);
+        request.set([key.length],                       1 + namespace.length);
+        request.set(this.textEncoder.encode(key),       2 + namespace.length);
 
-        let result = await this.transaction(BadgeUSB.PROTOCOL_COMMAND_CONFIGURATION_REMOVE, request.buffer, 4000);
+        const result = await this.transaction(BadgeUSB.PROTOCOL_COMMAND_CONFIGURATION_REMOVE, request.buffer, 4000);
         return (new DataView(result).getUint8(0) == 1);
     }
 

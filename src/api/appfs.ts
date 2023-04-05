@@ -30,15 +30,15 @@ export class BadgeAppFSApi {
         while (data.byteLength > 0) {
             let dataView = new DataView(data);
 
-            let name_length  = dataView.getUint16(0, true);
-            let name         = this.textDecoder.decode(data.slice(2, 2 + name_length));
-            let title_length = dataView.getUint16(2 + name_length, true);
-            let title        = this.textDecoder.decode(data.slice(2 + name_length + 2, 2 + name_length + 2 + title_length));
-            let version      = dataView.getUint16(2 + name_length + 2 + title_length, true);
-            let size         = dataView.getUint32(2 + name_length + 2 + title_length + 2, true);
+            let nameLength  = dataView.getUint16(0, true);
+            let name        = this.textDecoder.decode(data.slice(2, 2 + nameLength));
+            let titleLength = dataView.getUint16(2 + nameLength, true);
+            let title       = this.textDecoder.decode(data.slice(2 + nameLength + 2, 2 + nameLength + 2 + titleLength));
+            let version     = dataView.getUint16(2 + nameLength + 2 + titleLength, true);
+            let size        = dataView.getUint32(2 + nameLength + 2 + titleLength + 2, true);
             result.push({ name, title, version, size });
 
-            data = data.slice(2 + name_length + 2 + title_length + 2 + 4);
+            data = data.slice(2 + nameLength + 2 + titleLength + 2 + 4);
         }
         return result;
     }
@@ -52,16 +52,17 @@ export class BadgeAppFSApi {
             throw new Error(`Failed to open app file '${name}'`);
         }
 
+        let chunkSize = new ArrayBuffer(4);
+        new DataView(chunkSize).setUint32(0, 64, true);
+
         let parts = [];
-        let requested_size = new ArrayBuffer(4);
-        new DataView(requested_size).setUint32(0, 64, true);
         while (true) {
-            let part = await this.transaction(BadgeUSB.PROTOCOL_COMMAND_TRANSFER_CHUNK, requested_size, 4000);
+            let part = await this.transaction(BadgeUSB.PROTOCOL_COMMAND_TRANSFER_CHUNK, chunkSize, 4000);
             if (part === null || part.byteLength < 1) break;
             parts.push(part);
         }
         await this.fs.closeFile(); // This also works on appfs "files"
-        return concatBuffers(parts);
+        return concatBuffers(...parts);
     }
 
     /** @returns whether writing the app to AppFS succeeded */
@@ -73,14 +74,14 @@ export class BadgeAppFSApi {
 
         let request = new Uint8Array(10 + name.length + title.length);
         let dataView = new DataView(request.buffer);
-        request.set([name.length], 0);
-        request.set(this.textEncoder.encode(name), 1);
-        request.set([title.length], 1 + name.length);
+        request.set([name.length],                  0);
+        request.set(this.textEncoder.encode(name),  1);
+        request.set([title.length],                 1 + name.length);
         request.set(this.textEncoder.encode(title), 2 + name.length);
-        dataView.setUint32(2 + name.length + title.length, data.byteLength, true);
-        dataView.setUint16(2 + name.length + title.length + 4, version, true);
+        dataView.setUint32(2 + name.length + title.length,      data.byteLength, true);
+        dataView.setUint16(2 + name.length + title.length + 4,  version, true);
 
-        if (progressCallback) progressCallback("Allocating...", 0);
+        progressCallback?.("Allocating...", 0);
         let result = await this.transaction(BadgeUSB.PROTOCOL_COMMAND_APP_WRITE, request.buffer, 10000);
         if (new DataView(result).getUint8(0) !== 1) {
             throw new Error("Failed to allocate app");
@@ -89,9 +90,7 @@ export class BadgeAppFSApi {
         let total = data.byteLength;
         let position = 0;
         while (data.byteLength > 0) {
-            if (progressCallback) {
-                progressCallback("Writing...", Math.round((position * 100) / total));
-            }
+            progressCallback?.("Writing...", Math.round((position * 100) / total));
             let part = data.slice(0, 1024);
             if (part.byteLength < 1) break;
 
@@ -102,9 +101,7 @@ export class BadgeAppFSApi {
             position += written;
             data = data.slice(written);
         }
-        if (progressCallback) {
-            progressCallback("Closing...", 100);
-        }
+        progressCallback?.("Closing...", 100);
         await this.fs.closeFile();
         return (position == total);
     }

@@ -446,7 +446,7 @@ export class BadgeUSB {
         dataView.setUint32(16, payload.byteLength > 0 ? crc32FromArrayBuffer(payload) : 0, true);
 
         if (this.debug.tx) console.debug(`TX packet ${id}:`, { header, payload });
-        let packet = concatBuffers([header, payload]);
+        let packet = concatBuffers(header, payload);
         await this._dataTransferOut(packet);
 
         this.txPacketCount++;
@@ -455,7 +455,7 @@ export class BadgeUSB {
     private dataBuffer = new ArrayBuffer(0);
     private async _handleData(buffer: ArrayBuffer) {
         if (this.debug.rx) console.debug('RX data:', buffer);
-        this.dataBuffer = concatBuffers([this.dataBuffer, buffer]);
+        this.dataBuffer = concatBuffers(this.dataBuffer, buffer);
         if (this.debug.rx) console.debug('RX buffer:', this.dataBuffer.slice(0));
 
         while (this.dataBuffer.byteLength >= 20) {

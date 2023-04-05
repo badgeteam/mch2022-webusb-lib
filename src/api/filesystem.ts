@@ -35,15 +35,17 @@ export class BadgeFileSystemApi {
         let result: FileListing[] = [];
         while (data.byteLength > 0) {
             let dataView = new DataView(data);
-            let itemType = dataView.getUint8(0);
+            let itemType       = dataView.getUint8(0);
             let itemNameLength = dataView.getUint32(1, true);
-            let itemName = this.textDecoder.decode(data.slice(5, 5 + itemNameLength));
-            data = data.slice(5 + itemNameLength);
+            let itemName       = this.textDecoder.decode(data.slice(5, 5 + itemNameLength));
+            data = data.slice(5 + itemNameLength)
+
             dataView = new DataView(data);
-            let stat = dataView.getInt32(0, true);  // only works for files
-            let itemSize = dataView.getUint32(4, true);
+            let stat         = dataView.getInt32(0, true);  // only works for files
+            let itemSize     = dataView.getUint32(4, true);
             let itemModified = dataView.getBigUint64(8, true);
             data = data.slice(16);
+
             result.push({
                 name: itemName,
                 path: `${path}/${itemName}`,
@@ -113,16 +115,17 @@ export class BadgeFileSystemApi {
             throw new Error(`Failed to open file '${filePath}'`);
         }
 
+        let chunkSize = new ArrayBuffer(4);
+        new DataView(chunkSize).setUint32(0, 512, true);
+
         let parts = [];
-        let requested_size = new ArrayBuffer(4);
-        new DataView(requested_size).setUint32(0, 512, true);
         while (true) {
-            let part = await this.transaction(BadgeUSB.PROTOCOL_COMMAND_TRANSFER_CHUNK, requested_size, 4000);
+            let part = await this.transaction(BadgeUSB.PROTOCOL_COMMAND_TRANSFER_CHUNK, chunkSize, 4000);
             if (part === null || part.byteLength < 1) break;
             parts.push(part);
         }
         await this.closeFile();
-        return concatBuffers(parts);
+        return concatBuffers(...parts);
     }
 
     /** @returns whether the operation succeeded */
@@ -130,9 +133,8 @@ export class BadgeFileSystemApi {
         assertString('filePath', filePath);
         assertInstanceOf(ArrayBuffer, 'data', data);
 
-        if (progressCallback) {
-            progressCallback("Creating...", 0);
-        }
+        progressCallback?.("Creating...", 0);
+
         let result = await this.transaction(BadgeUSB.PROTOCOL_COMMAND_FILESYSTEM_FILE_WRITE, this.textEncoder.encode(filePath), 4000);
         if (new DataView(result).getUint8(0) !== 1) {
             throw new Error(`Failed to open file '${filePath}'`);
@@ -141,20 +143,18 @@ export class BadgeFileSystemApi {
         let total = data.byteLength;
         let position = 0;
         while (data.byteLength > 0) {
-            if (progressCallback) {
-                progressCallback("Writing...", Math.round((position * 100) / total));
-            }
+            progressCallback?.("Writing...", Math.round((position * 100) / total));
+
             let part = data.slice(0, 512);
             if (part.byteLength < 1) break;
             let result = await this.transaction(BadgeUSB.PROTOCOL_COMMAND_TRANSFER_CHUNK, part, 4000);
+
             let written = new DataView(result).getUint32(0, true);
             if (written < 1) throw new Error("Write failed");
             position += written;
             data = data.slice(written);
         }
-        if (progressCallback) {
-            progressCallback("Closing...", 100);
-        }
+        progressCallback?.("Closing...", 100);
         await this.closeFile();
         return (position == total);
     }
