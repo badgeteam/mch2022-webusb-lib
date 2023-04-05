@@ -217,23 +217,23 @@ export class BadgeUSB {
         return this.device.serialNumber;
     }
 
-    async controlSetState(state: BadgeUSBState) {
-        await this._controlTransferOut(
+    controlSetState(state: BadgeUSBState) {
+        return this._controlTransferOut(
             BadgeUSB.REQUEST_STATE,
             state == BadgeUSBState.WebUSB ? BadgeUSBState.WebUSB : BadgeUSBState.CDC,
         );
     }
 
-    async controlReset(bootloaderMode = false) {
-        await this._controlTransferOut(BadgeUSB.REQUEST_RESET, bootloaderMode ? 0x01 : 0x00);
+    controlReset(bootloaderMode = false) {
+        return this._controlTransferOut(BadgeUSB.REQUEST_RESET, bootloaderMode ? 0x01 : 0x00);
     }
 
-    async controlSetBaudrate(baudrate: number) {
-        await this._controlTransferOut(BadgeUSB.REQUEST_BAUDRATE, Math.floor(baudrate / 100));
+    controlSetBaudrate(baudrate: number) {
+        return this._controlTransferOut(BadgeUSB.REQUEST_BAUDRATE, Math.floor(baudrate / 100));
     }
 
-    async controlSetMode(mode: number) {
-        await this._controlTransferOut(BadgeUSB.REQUEST_MODE, mode);
+    controlSetMode(mode: number) {
+        return this._controlTransferOut(BadgeUSB.REQUEST_MODE, mode);
     }
 
     async controlGetMode() {
@@ -338,7 +338,7 @@ export class BadgeUSB {
         return response.payload.buffer;
     }
 
-    get pendingTransactionCount() {
+    get pendingTransactionCount(): number {
         return Object.keys(this.pendingTransactions).length;
     };
 
@@ -379,7 +379,7 @@ export class BadgeUSB {
             while (this.listening) {
                 let result = await this._dataTransferIn();
                 if (!this.listening) break; // FIXME redundant?
-                await this._handleData(result.buffer);
+                this._handleData(result.buffer);
             }
         } catch (error) {
             console.error('FATAL Error while listening for data:', error);
@@ -396,8 +396,8 @@ export class BadgeUSB {
         await this._sendPacket(0, BadgeUSB.PROTOCOL_COMMAND_SYNC);
     }
 
-    private async _controlTransferOut(request: number, value: number) {
-        await this.device.controlTransferOut({
+    private _controlTransferOut(request: number, value: number): Promise<USBOutTransferResult> {
+        return this.device.controlTransferOut({
             requestType: 'class',
             recipient: 'interface',
             request: request,
@@ -406,7 +406,7 @@ export class BadgeUSB {
         });
     }
 
-    private async _controlTransferIn(request: number, length = 1) {
+    private async _controlTransferIn(request: number, length = 1): Promise<DataView> {
         let result = await this.device.controlTransferIn({
             requestType: 'class',
             recipient: 'interface',
@@ -421,12 +421,12 @@ export class BadgeUSB {
         return result.data;
     }
 
-    private async _dataTransferOut(data: BufferSource) {
-        await this.device.transferOut(this.endpoints.out.endpointNumber, data);
+    private _dataTransferOut(data: BufferSource): Promise<USBOutTransferResult> {
+        return this.device.transferOut(this.endpoints.out.endpointNumber, data);
     }
 
-    private async _dataTransferIn(length = 64) {
-        let result = await this.device.transferIn(this.endpoints.in.endpointNumber, length);//20 + 8192);
+    private async _dataTransferIn(length = 64): Promise<DataView> {
+        let result = await this.device.transferIn(this.endpoints.in.endpointNumber, length);
         if (!result.data) {
             throw new RXError("Data transfer failed: no data received");
         }
@@ -447,7 +447,8 @@ export class BadgeUSB {
 
         if (this.debug.tx) console.debug(`TX packet ${id}:`, { header, payload });
         let packet = concatBuffers(header, payload);
-        await this._dataTransferOut(packet);
+        let result = await this._dataTransferOut(packet);
+        if (this.debug.tx) console.debug(`TX packet ${id} transfer result:`, result);
 
         this.txPacketCount++;
     }
@@ -460,11 +461,13 @@ export class BadgeUSB {
 
         while (this.dataBuffer.byteLength >= 20) {
             let dataView = new DataView(this.dataBuffer);
+
             let magic = dataView.getUint32(0, true);
             if (magic == BadgeUSB.PROTOCOL_MAGIC) {
                 let payloadLength = dataView.getUint32(12, true);
+
                 if (this.dataBuffer.byteLength >= 20 + payloadLength) {
-                    await this._handlePacket(this.dataBuffer.slice(0, 20 + payloadLength));
+                    this._handlePacket(this.dataBuffer.slice(0, 20 + payloadLength));
                     this.dataBuffer = this.dataBuffer.slice(20 + payloadLength);
                 } else {
                     return; // Wait for more data
@@ -480,16 +483,16 @@ export class BadgeUSB {
     private crcMismatchCount = 0;
     private async _handlePacket(buffer: ArrayBuffer) {
         let dataView = new DataView(buffer);
-        let magic = dataView.getUint32(0, true);
-        let id    = dataView.getUint32(4, true);
-        let responseType = dataView.getUint32(8, true);
+        let magic            = dataView.getUint32(0, true);
+        let id               = dataView.getUint32(4, true);
+        let responseType     = dataView.getUint32(8, true);
         let responseTypeCode = this._decodeUint32AsString(responseType);
-        let payloadLength = dataView.getUint32(12, true);
-        let payloadCRC = dataView.getUint32(16, true);
+        let payloadLength    = dataView.getUint32(12, true);
+        let payloadCRC       = dataView.getUint32(16, true);
         if (this.debug.rx) console.debug('RX packet', id, 'header:', {
             id, type: responseTypeCode,
             payloadLength, payloadCRC,
-            magic: magic.toString(16),
+            magic: magic.toString(0x10),
             buffer: buffer.slice(0, 20),
         });
 
@@ -564,7 +567,7 @@ export type TransactionResponse = Readonly<{
     id: number,
     dataView: DataView,
     magic: number,
-    type: number,   // command
+    type: number,   // command or error code
     typeCode: string,
 
     payload: Readonly<{
