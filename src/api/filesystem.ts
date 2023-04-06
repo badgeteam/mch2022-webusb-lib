@@ -3,7 +3,7 @@ import { ProgressCallback } from "../badge-api";
 import { concatBuffers } from "../lib/buffers";
 import { BadgeUSB } from "../badge-usb";
 
-export type FileListing = {
+type _FSListing = {
     name: string,
     path: string,
     type: "dir" | "file",
@@ -12,6 +12,9 @@ export type FileListing = {
         modified: bigint,
     } | null
 }
+export type DirListing = _FSListing & { type: 'dir' };
+export type FileListing = _FSListing & { type: 'file' };
+export type FSListing = DirListing | FileListing;
 
 export class BadgeFileSystemApi {
     constructor(
@@ -25,14 +28,14 @@ export class BadgeFileSystemApi {
      * Lists entries in the folder given by `path`
      * @param path default: `/internal`
      */
-    async list(path: string = '/internal'): Promise<FileListing[]> {
+    async list(path: string = '/internal'): Promise<FSListing[]> {
         if (path == '') {
             throw Error('Path must not be empty');
         }
         let pathEncoded = this.textEncoder.encode(path);
         let data: ArrayBuffer = await this.transaction(BadgeUSB.PROTOCOL_COMMAND_FILESYSTEM_LIST, pathEncoded, 4000);
 
-        let result: FileListing[] = [];
+        let result: FSListing[] = [];
         while (data.byteLength > 0) {
             let dataView = new DataView(data);
             let itemType       = dataView.getUint8(0);
