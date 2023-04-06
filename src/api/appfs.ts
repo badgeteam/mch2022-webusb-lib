@@ -52,13 +52,14 @@ export class BadgeAppFSApi {
             throw new Error(`Failed to open app file '${name}'`);
         }
 
-        let chunkSize = new ArrayBuffer(4);
-        new DataView(chunkSize).setUint32(0, 64, true);
+        const chunkSize = 64;
+        let chunkSizeField = new ArrayBuffer(4);
+        new DataView(chunkSizeField).setUint32(0, chunkSize, true);
 
         let parts = [];
         while (true) {
-            let part = await this.transaction(BadgeUSB.PROTOCOL_COMMAND_TRANSFER_CHUNK, chunkSize, 4000);
-            if (part === null || part.byteLength < 1) break;
+            let part = await this.transaction(BadgeUSB.PROTOCOL_COMMAND_TRANSFER_CHUNK, chunkSizeField, 4000);
+            if (part === null || part.byteLength < chunkSize) break;
             parts.push(part);
         }
         await this.fs.closeFile(); // This also works on appfs "files"

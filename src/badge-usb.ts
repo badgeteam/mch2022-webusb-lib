@@ -311,7 +311,6 @@ export class BadgeUSB {
                 } catch (error) {
                     if (!(error instanceof TimeoutError)) throw error;
                 }
-                console.debug(error);
                 if (payload) console.debug(`payload for failed ${commandCode}:`, payload, BadgeUSB.textDecoder.decode(payload));
 
                 delete this.pendingTransactions[transactionID];
