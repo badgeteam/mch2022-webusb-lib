@@ -12,3 +12,17 @@ export function concatBuffers(...buffers: ArrayBuffer[]) {
     }
     return tmp.buffer;
 }
+
+export function seekUint8(data: DataView, marker: number) {
+    for (let i = 0; i+3 < data.byteLength; i++) {
+        if (data.getUint8(i) == marker) return i;
+    }
+    return -1;
+}
+
+export function seekUint32(data: DataView, marker: number, littleEndian = true) {
+    for (let i = 0; i+3 < data.byteLength; i++) {
+        if (data.getUint32(i, littleEndian) == marker) return i;
+    }
+    return -1;
+}

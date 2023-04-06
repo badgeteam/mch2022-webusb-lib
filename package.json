@@ -1,6 +1,6 @@
 {
   "name": "@badge.team/badge-webusb",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Web API for the Badge.team MCH2022 badge",
   "keywords": [
     "USB",

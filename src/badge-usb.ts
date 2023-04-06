@@ -3,8 +3,8 @@
  * @author Reinier van der Leer
  */
 
+import { concatBuffers, seekUint32, seekUint8 } from "./lib/buffers";
 import { crc32FromArrayBuffer } from "./lib/crc32";
-import { concatBuffers } from "./lib/buffers";
 import DeferredPromise from "./lib/deferred-promise";
 import FancyError from "fancy-error";
 
@@ -60,6 +60,10 @@ export class BadgeUSB {
     static readonly PROTOCOL_COMMAND_CONFIGURATION_READ          = new DataView(this.textEncoder.encode("NVSR").buffer).getUint32(0, true);
     static readonly PROTOCOL_COMMAND_CONFIGURATION_WRITE         = new DataView(this.textEncoder.encode("NVSW").buffer).getUint32(0, true);
     static readonly PROTOCOL_COMMAND_CONFIGURATION_REMOVE        = new DataView(this.textEncoder.encode("NVSD").buffer).getUint32(0, true);
+
+    // Firmware error markers
+    static readonly FIRMWARE_ERR_MAGIC_START = 0x1B5B303B;   // \x1B[0;
+    static readonly FIRMWARE_ERR_MAGIC_END   = 0x1B5B306D;   // \x1B[0m
 
     public debug = {
         rx: false,
@@ -123,7 +127,7 @@ export class BadgeUSB {
         let n = 0;
         do {
             if (++n > 100) {
-                throw new Error(`Sync failed after ${n} tries`);
+                throw new Error(`Sync failed after ${n - 1} tries`);
             }
             console.debug('Connecting: syncing bus: attempt', n);
             await badge.sync().then(v => protocolVersion = v).catch(() => {});
@@ -471,9 +475,33 @@ export class BadgeUSB {
                 } else {
                     return; // Wait for more data
                 }
+
+            } else if (dataView.getUint32(0, false) == BadgeUSB.FIRMWARE_ERR_MAGIC_START) {
+                // example: \x1B[0;31mE (158018) vfs_fat: open: no free file descriptors\x1B[0m\r\n\r
+                let startPos = seekUint8(dataView, 0x20) + 1;   // find space = start of message
+                let endPos = seekUint32(dataView, BadgeUSB.FIRMWARE_ERR_MAGIC_END, false);
+
+                if (endPos == -1) {
+                    if (this.debug.rx) console.debug(
+                        'RX: received partial firmware error:',
+                        BadgeUSB.textDecoder.decode(this.dataBuffer.slice(startPos)),
+                    );
+                    return; // wait for end of error / more data
+                }
+                console.warn(
+                    'RX: received firmware error:',
+                    BadgeUSB.textDecoder.decode(this.dataBuffer.slice(startPos, endPos)),
+                );
+                this.dataBuffer = this.dataBuffer.slice(endPos + 4);
+
             } else {
-                if (this.debug.rx) console.debug(`RX: discarding non-magic byte 0x${magic.toString(16)}`);
-                this.dataBuffer = this.dataBuffer.slice(1); // No magic -> discard first byte
+                let magicPos = seekUint32(dataView, BadgeUSB.PROTOCOL_MAGIC);
+                if (magicPos == -1) return; // wait for more data
+
+                const errMessage = BadgeUSB.textDecoder.decode(this.dataBuffer.slice(0, magicPos));
+                this.dataBuffer = this.dataBuffer.slice(magicPos);
+                if (this.inSync && errMessage.trim().length > 0)    // ignore noise & whitespace
+                    console.warn(`RX: unexpected non-magic data: '${errMessage}'`);
             }
         }
     }
