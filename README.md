@@ -1,7 +1,10 @@
 # MCH2022 WebUSB API library
-![latest NPM release](https://img.shields.io/npm/v/@badge.team/badge-webusb?style=flat-square)
-![bundle size](https://img.shields.io/bundlephobia/min/@badge.team/badge-webusb?style=flat-square)
-![license](https://img.shields.io/github/license/badgeteam/mch2022-webusb-lib?style=flat-square)
+[![latest NPM release](https://img.shields.io/npm/v/@badge.team/badge-webusb?style=flat-square)][NPM]
+[![bundle size](https://img.shields.io/bundlephobia/min/@badge.team/badge-webusb?style=flat-square)][NPM/code]
+[![license](https://img.shields.io/github/license/badgeteam/mch2022-webusb-lib?style=flat-square)](LICENSE)
+
+[NPM]: https://www.npmjs.com/package/@badge.team/badge-webusb
+[NPM/code]: https://www.npmjs.com/package/@badge.team/badge-webusb?activeTab=code
 
 This library allows easy WebUSB communication with the MCH2022 badge, and possibly
 more badges in the future.
