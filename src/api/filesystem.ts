@@ -1,6 +1,7 @@
 import { assertString, assertInstanceOf } from "../lib/assert-type";
 import { ProgressCallback } from "../badge-api";
 import { concatBuffers } from "../lib/buffers";
+import Queue, { QToken } from "../lib/queue";
 import { BadgeUSB } from "../badge-usb";
 
 type _FSListing = {
@@ -19,6 +20,7 @@ export type FSListing = DirListing | FileListing;
 export class BadgeFileSystemApi {
     constructor(
         private transaction: BadgeUSB['transaction'],
+        private transactionQueue: Queue,
     ) {}
 
     textEncoder = new TextEncoder();
@@ -33,7 +35,10 @@ export class BadgeFileSystemApi {
             throw Error('Path must not be empty');
         }
         let pathEncoded = this.textEncoder.encode(path);
-        let data: ArrayBuffer = await this.transaction(BadgeUSB.PROTOCOL_COMMAND_FILESYSTEM_LIST, pathEncoded, 4000);
+        let data: ArrayBuffer = await this.transaction(
+            BadgeUSB.PROTOCOL_COMMAND_FILESYSTEM_LIST,
+            pathEncoded, 2000,
+        );
 
         let result: FSListing[] = [];
         while (data.byteLength > 0) {
@@ -113,22 +118,35 @@ export class BadgeFileSystemApi {
     async readFile(filePath: string): Promise<ArrayBuffer> {
         assertString('filePath', filePath);
 
-        let result = await this.transaction(BadgeUSB.PROTOCOL_COMMAND_FILESYSTEM_FILE_READ, this.textEncoder.encode(filePath), 4000);
-        if (new DataView(result).getUint8(0) !== 1) {
-            throw new Error(`Failed to open file '${filePath}'`);
-        }
+        const parts: ArrayBuffer[] = [];
+        const queueToken = await this.transactionQueue.waitTurn();
+        try {
+            let result = await this.transaction(
+                BadgeUSB.PROTOCOL_COMMAND_FILESYSTEM_FILE_READ,
+                this.textEncoder.encode(filePath), 4000, queueToken,
+            );
+            if (new DataView(result).getUint8(0) !== 1) {
+                throw new Error(`Failed to open file '${filePath}'`);
+            }
 
-        const chunkSize = 512;
-        let chunkSizeField = new ArrayBuffer(4);
-        new DataView(chunkSizeField).setUint32(0, chunkSize, true);
+            const chunkSize = 512;
+            let chunkSizeField = new ArrayBuffer(4);
+            new DataView(chunkSizeField).setUint32(0, chunkSize, true);
 
-        let parts = [];
-        while (true) {
-            let part = await this.transaction(BadgeUSB.PROTOCOL_COMMAND_TRANSFER_CHUNK, chunkSizeField, 4000);
-            if (part === null || part.byteLength < chunkSize) break;
-            parts.push(part);
+            let part: ArrayBuffer;
+            do {
+                part = await this.transaction(
+                    BadgeUSB.PROTOCOL_COMMAND_TRANSFER_CHUNK,
+                    chunkSizeField, 4000, queueToken,
+                );
+                if (part === null) break;
+                parts.push(part);
+            } while (part.byteLength == chunkSize)
+
+        } finally {
+            await this.closeFile(queueToken);
+            this.transactionQueue.release(queueToken);
         }
-        await this.closeFile();
         return concatBuffers(...parts);
     }
 
@@ -139,33 +157,48 @@ export class BadgeFileSystemApi {
 
         progressCallback?.("Creating...", 0);
 
-        let result = await this.transaction(BadgeUSB.PROTOCOL_COMMAND_FILESYSTEM_FILE_WRITE, this.textEncoder.encode(filePath), 4000);
-        if (new DataView(result).getUint8(0) !== 1) {
-            throw new Error(`Failed to open file '${filePath}'`);
-        }
-
-        let total = data.byteLength;
+        const total = data.byteLength;
         let position = 0;
-        while (data.byteLength > 0) {
-            progressCallback?.("Writing...", Math.round((position * 100) / total));
 
-            let part = data.slice(0, 512);
-            if (part.byteLength < 1) break;
-            let result = await this.transaction(BadgeUSB.PROTOCOL_COMMAND_TRANSFER_CHUNK, part, 4000);
+        const queueToken = await this.transactionQueue.waitTurn();
+        try {
+            let result = await this.transaction(
+                BadgeUSB.PROTOCOL_COMMAND_FILESYSTEM_FILE_WRITE,
+                this.textEncoder.encode(filePath), 4000, queueToken,
+            );
+            if (new DataView(result).getUint8(0) !== 1) {
+                throw new Error(`Failed to open file '${filePath}'`);
+            }
 
-            let written = new DataView(result).getUint32(0, true);
-            if (written < 1) throw new Error("Write failed");
-            position += written;
-            data = data.slice(written);
+            while (data.byteLength > 0) {
+                progressCallback?.("Writing...", Math.round((position * 100) / total));
+
+                let part = data.slice(0, 512);
+                if (part.byteLength < 1) break;
+                let result = await this.transaction(
+                    BadgeUSB.PROTOCOL_COMMAND_TRANSFER_CHUNK,
+                    part, 4000, queueToken,
+                );
+
+                let written = new DataView(result).getUint32(0, true);
+                if (written < 1) throw new Error("Write failed");
+                position += written;
+                data = data.slice(written);
+            }
+        } finally {
+            progressCallback?.("Closing...", 100);
+            await this.closeFile(queueToken);
+            this.transactionQueue.release(queueToken);
         }
-        progressCallback?.("Closing...", 100);
-        await this.closeFile();
         return (position == total);
     }
 
     /** @returns whether the operation succeeded */
-    async closeFile(): Promise<boolean> {
-        let result = await this.transaction(BadgeUSB.PROTOCOL_COMMAND_FILESYSTEM_FILE_CLOSE, null, 4000);
+    async closeFile(queueToken: QToken): Promise<boolean> {
+        let result = await this.transaction(
+            BadgeUSB.PROTOCOL_COMMAND_FILESYSTEM_FILE_CLOSE,
+            null, 4000, queueToken,
+        );
         return (new DataView(result).getUint8(0) == 1);
     }
 }

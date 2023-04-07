@@ -5,6 +5,7 @@
 
 import { concatBuffers, seekUint32, seekUint8 } from "./lib/buffers";
 import { crc32FromArrayBuffer } from "./lib/crc32";
+import Queue, { QToken } from "./lib/queue";
 import DeferredPromise from "./lib/deferred-promise";
 import FancyError from "fancy-error";
 
@@ -40,26 +41,26 @@ export class BadgeUSB {
 
     // Protocol
     static readonly PROTOCOL_MAGIC                               = 0xFEEDF00D;
-    static readonly PROTOCOL_COMMAND_SYNC                        = new DataView(this.textEncoder.encode("SYNC").buffer).getUint32(0, true);
-    static readonly PROTOCOL_COMMAND_PING                        = new DataView(this.textEncoder.encode("PING").buffer).getUint32(0, true);
-    static readonly PROTOCOL_COMMAND_FILESYSTEM_LIST             = new DataView(this.textEncoder.encode("FSLS").buffer).getUint32(0, true);
-    static readonly PROTOCOL_COMMAND_FILESYSTEM_EXISTS           = new DataView(this.textEncoder.encode("FSEX").buffer).getUint32(0, true);
-    static readonly PROTOCOL_COMMAND_FILESYSTEM_CREATE_DIRECTORY = new DataView(this.textEncoder.encode("FSMD").buffer).getUint32(0, true);
-    static readonly PROTOCOL_COMMAND_FILESYSTEM_REMOVE           = new DataView(this.textEncoder.encode("FSRM").buffer).getUint32(0, true);
-    static readonly PROTOCOL_COMMAND_FILESYSTEM_STATE            = new DataView(this.textEncoder.encode("FSST").buffer).getUint32(0, true);
-    static readonly PROTOCOL_COMMAND_FILESYSTEM_FILE_WRITE       = new DataView(this.textEncoder.encode("FSFW").buffer).getUint32(0, true);
-    static readonly PROTOCOL_COMMAND_FILESYSTEM_FILE_READ        = new DataView(this.textEncoder.encode("FSFR").buffer).getUint32(0, true);
-    static readonly PROTOCOL_COMMAND_FILESYSTEM_FILE_CLOSE       = new DataView(this.textEncoder.encode("FSFC").buffer).getUint32(0, true);
-    static readonly PROTOCOL_COMMAND_TRANSFER_CHUNK              = new DataView(this.textEncoder.encode("CHNK").buffer).getUint32(0, true);
-    static readonly PROTOCOL_COMMAND_APP_LIST                    = new DataView(this.textEncoder.encode("APPL").buffer).getUint32(0, true);
-    static readonly PROTOCOL_COMMAND_APP_READ                    = new DataView(this.textEncoder.encode("APPR").buffer).getUint32(0, true);
-    static readonly PROTOCOL_COMMAND_APP_WRITE                   = new DataView(this.textEncoder.encode("APPW").buffer).getUint32(0, true);
-    static readonly PROTOCOL_COMMAND_APP_REMOVE                  = new DataView(this.textEncoder.encode("APPD").buffer).getUint32(0, true);
-    static readonly PROTOCOL_COMMAND_APP_RUN                     = new DataView(this.textEncoder.encode("APPX").buffer).getUint32(0, true);
-    static readonly PROTOCOL_COMMAND_CONFIGURATION_LIST          = new DataView(this.textEncoder.encode("NVSL").buffer).getUint32(0, true);
-    static readonly PROTOCOL_COMMAND_CONFIGURATION_READ          = new DataView(this.textEncoder.encode("NVSR").buffer).getUint32(0, true);
-    static readonly PROTOCOL_COMMAND_CONFIGURATION_WRITE         = new DataView(this.textEncoder.encode("NVSW").buffer).getUint32(0, true);
-    static readonly PROTOCOL_COMMAND_CONFIGURATION_REMOVE        = new DataView(this.textEncoder.encode("NVSD").buffer).getUint32(0, true);
+    static readonly PROTOCOL_COMMAND_SYNC                        = this._encodeCommand("SYNC");
+    static readonly PROTOCOL_COMMAND_PING                        = this._encodeCommand("PING");
+    static readonly PROTOCOL_COMMAND_FILESYSTEM_LIST             = this._encodeCommand("FSLS");
+    static readonly PROTOCOL_COMMAND_FILESYSTEM_EXISTS           = this._encodeCommand("FSEX");
+    static readonly PROTOCOL_COMMAND_FILESYSTEM_CREATE_DIRECTORY = this._encodeCommand("FSMD");
+    static readonly PROTOCOL_COMMAND_FILESYSTEM_REMOVE           = this._encodeCommand("FSRM");
+    static readonly PROTOCOL_COMMAND_FILESYSTEM_STATE            = this._encodeCommand("FSST");
+    static readonly PROTOCOL_COMMAND_FILESYSTEM_FILE_WRITE       = this._encodeCommand("FSFW");
+    static readonly PROTOCOL_COMMAND_FILESYSTEM_FILE_READ        = this._encodeCommand("FSFR");
+    static readonly PROTOCOL_COMMAND_FILESYSTEM_FILE_CLOSE       = this._encodeCommand("FSFC");
+    static readonly PROTOCOL_COMMAND_TRANSFER_CHUNK              = this._encodeCommand("CHNK");
+    static readonly PROTOCOL_COMMAND_APP_LIST                    = this._encodeCommand("APPL");
+    static readonly PROTOCOL_COMMAND_APP_READ                    = this._encodeCommand("APPR");
+    static readonly PROTOCOL_COMMAND_APP_WRITE                   = this._encodeCommand("APPW");
+    static readonly PROTOCOL_COMMAND_APP_REMOVE                  = this._encodeCommand("APPD");
+    static readonly PROTOCOL_COMMAND_APP_RUN                     = this._encodeCommand("APPX");
+    static readonly PROTOCOL_COMMAND_CONFIGURATION_LIST          = this._encodeCommand("NVSL");
+    static readonly PROTOCOL_COMMAND_CONFIGURATION_READ          = this._encodeCommand("NVSR");
+    static readonly PROTOCOL_COMMAND_CONFIGURATION_WRITE         = this._encodeCommand("NVSW");
+    static readonly PROTOCOL_COMMAND_CONFIGURATION_REMOVE        = this._encodeCommand("NVSD");
 
     // Firmware error markers
     static readonly FIRMWARE_ERR_MAGIC_START = 0x1B5B303B;   // \x1B[0;
@@ -202,7 +203,7 @@ export class BadgeUSB {
             crcErrors: this.crcMismatchCount,
             transactions: this.nextTransactionID,
             timesOutOfSync: this.resyncCount,
-            pendingTransactions: this.pendingTransactionCount,
+            queuedTransactions: this.queuedTransactionCount,
         };
     }
 
@@ -276,34 +277,34 @@ export class BadgeUSB {
         }
     }
 
+    /** Can be used in multi-transaction functions to block other transactions */
+    public transactionQueue = new Queue();
+
     private nextTransactionID: number = 0;
-    private queuedTransactionIDs: number[] = [];
-    private pendingTransactions: { [key: number]: TransactionPromise } = {};
-    async transaction(command: number, payload: ArrayBuffer | null, timeout = 0): Promise<ArrayBuffer> {
+    private transactions: TransactionPromise[] = [];
+
+    async transaction(
+        command: number,
+        payload: ArrayBuffer | null,
+        timeout = 0,
+        queueToken?: QToken
+    ): Promise<ArrayBuffer> {
         const transaction = new TransactionPromise();
-        const commandCode = this._decodeUint32AsString(command);
+        const commandCode = BadgeUSB._decodeCommand(command);
         const transactionID = this.nextTransactionID;
         this.nextTransactionID = (this.nextTransactionID + 1) & 0xFFFFFFFF;
-        this.queuedTransactionIDs.push(transactionID);
 
+        console.debug(`queueing transaction`, transactionID, `(${commandCode})`);
+        let token = await this.transactionQueue.waitTurn({
+            token: queueToken,
+            turnTimeout: timeout > 0 ? timeout + 500 : undefined,
+        });
+
+        this.transactions[transactionID] = transaction;
         console.debug(
-            `queued transaction`, transactionID, `(${commandCode});`,
-            'queue:', this.queuedTransactionIDs
+            'starting transaction', transactionID, `(${commandCode});`,
+            'queue length:', this.transactionQueue.length,
         );
-
-        let nextInLine: boolean;
-        do {
-            // wait for pending transactions to finish
-            nextInLine = transactionID == this.queuedTransactionIDs[0];
-
-            if (this.pendingTransactionCount > 0) {
-                await Promise.all(Object.values(this.pendingTransactions)).catch(() => {}); // mitigate transaction bursts
-            }
-        } while (!nextInLine)
-
-        this.pendingTransactions[transactionID] = transaction;
-        this.queuedTransactionIDs.shift();
-        console.debug('started transaction', transactionID, `(${commandCode}); queue:`, this.queuedTransactionIDs);
 
         if (timeout > 0) {
             const error = new TimeoutError(
@@ -315,9 +316,12 @@ export class BadgeUSB {
                 } catch (error) {
                     if (!(error instanceof TimeoutError)) throw error;
                 }
-                if (payload) console.debug(`payload for failed ${commandCode}:`, payload, BadgeUSB.textDecoder.decode(payload));
+                if (payload) console.debug(
+                    `payload for failed ${commandCode}:`,
+                    payload, BadgeUSB.textDecoder.decode(payload)
+                );
 
-                delete this.pendingTransactions[transactionID];
+                delete this.transactions[transactionID];
                 this.inSync = false;
             }, timeout);
         }
@@ -329,7 +333,12 @@ export class BadgeUSB {
             response = await transaction;
         } catch (error) {
             if (error instanceof TimeoutError) throw error;
-            throw new RXError(`Transaction ${transactionID} (${commandCode}) failed`, error, undefined, false);
+            throw new RXError(
+                `Transaction ${transactionID} (${commandCode}) failed`,
+                error, undefined, false
+            );
+        } finally {
+            if (queueToken == undefined) this.transactionQueue.release(token);
         }
         console.debug('finshed transaction', transactionID, `(${commandCode})`);
 
@@ -341,9 +350,9 @@ export class BadgeUSB {
         return response.payload.buffer;
     }
 
-    get pendingTransactionCount(): number {
-        return Object.keys(this.pendingTransactions).length;
-    };
+    get queuedTransactionCount(): number {
+        return this.transactionQueue.length;
+    }
 
 
     private static _getInterface(device: USBDevice, index: number): USBInterface {
@@ -513,7 +522,7 @@ export class BadgeUSB {
         let magic            = dataView.getUint32(0, true);
         let id               = dataView.getUint32(4, true);
         let responseType     = dataView.getUint32(8, true);
-        let responseTypeCode = this._decodeUint32AsString(responseType);
+        let responseTypeCode = BadgeUSB._decodeCommand(responseType);
         let payloadLength    = dataView.getUint32(12, true);
         let payloadCRC       = dataView.getUint32(16, true);
         if (this.debug.rx) console.debug('RX packet', id, 'header:', {
@@ -531,8 +540,8 @@ export class BadgeUSB {
             if (crc32FromArrayBuffer(payload) !== payloadCRC) {
                 console.debug('RX CRC mismatch; mismatches so far:', ++this.crcMismatchCount);
 
-                if (id in this.pendingTransactions) {
-                    const transaction = this.pendingTransactions[id];
+                if (id in this.transactions) {
+                    const transaction = this.transactions[id];
 
                     if (transaction !== null) {
                         clearTimeout(transaction.timeout);
@@ -553,7 +562,7 @@ export class BadgeUSB {
                     } catch (error) {
                         if (!(error instanceof RXError)) throw error;
                     }
-                    delete this.pendingTransactions[id];
+                    delete this.transactions[id];
                 } else {
                     console.error("Found no transaction for", id, responseTypeCode);
                 }
@@ -561,9 +570,9 @@ export class BadgeUSB {
             }
         }
 
-        if (id in this.pendingTransactions) {
-            clearTimeout(this.pendingTransactions[id].timeout);
-            this.pendingTransactions[id].resolve({
+        if (id in this.transactions) {
+            clearTimeout(this.transactions[id].timeout);
+            this.transactions[id].resolve({
                 id, dataView, magic,
                 type:     responseType,
                 typeCode: responseTypeCode,
@@ -573,18 +582,22 @@ export class BadgeUSB {
                     declaredLength: payloadLength,
                 },
             });
-            delete this.pendingTransactions[id];
+            delete this.transactions[id];
             this.rxPacketCount++;
         } else {
             console.error("Found no transaction for", id, responseType);
         }
     }
 
-    private _decodeUint32AsString(cmd: number): string {
-        const buffer = new ArrayBuffer(4);
-        const dataView = new DataView(buffer);
+    private static _decodeCommand(cmd: number): string {
+        const dataView = new DataView(new ArrayBuffer(4));
         dataView.setUint32(0, cmd, true);
-        return BadgeUSB.textDecoder.decode(new Uint8Array(buffer));
+        return this.textDecoder.decode(dataView.buffer);
+    }
+
+    private static _encodeCommand(cmd: string): number {
+        return new DataView(this.textEncoder.encode(cmd).buffer)
+        .getUint32(0, true);
     }
 }
 

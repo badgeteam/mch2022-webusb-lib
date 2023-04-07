@@ -17,12 +17,36 @@ export class BadgeAPI {
     textEncoder = new TextEncoder();
     textDecoder = new TextDecoder();
 
+    /*** API components ***/
+    public fileSystem?: BadgeFileSystemApi;
+    public appFS?: BadgeAppFSApi;
+    public nvs?: BadgeNVSApi;
+
     async connect(): Promise<boolean> {
         this.badge = await BadgeUSB.connect();
         this.badge.onConnectionLost = (err?: Error) => {
             delete this.badge;
             this._onConnectionLost.forEach(cb => { try { cb() } catch (e) {} });
         }
+
+        /*** Filesystem API ***/
+        this.fileSystem = new BadgeFileSystemApi(
+            this.transaction.bind(this),
+            this.badge.transactionQueue,
+        );
+
+        /*** AppFS API ***/
+        this.appFS = new BadgeAppFSApi(
+            this.fileSystem,
+            this.disconnect.bind(this),
+            this.transaction.bind(this),
+            this.badge.transactionQueue,
+        );
+
+        /*** NVS API */
+        this.nvs = new BadgeNVSApi(
+            this.transaction.bind(this),
+        );
 
         this._onConnect.forEach(cb => { try { cb(this) } catch (e) {} });
 
@@ -32,6 +56,9 @@ export class BadgeAPI {
     async disconnect(reset = false) {
         await this.syncConnection();
         await this.badge!.disconnect(reset);
+        delete this.fileSystem;
+        delete this.appFS;
+        delete this.nvs;
         delete this.badge;
     }
 
@@ -70,22 +97,4 @@ export class BadgeAPI {
         this.syncConnection();
         return this.badge!.transaction(...args);
     }
-
-
-    /*** Filesystem API ***/
-    public fileSystem = new BadgeFileSystemApi(
-        this.transaction.bind(this),
-    );
-
-    /*** AppFS API ***/
-    public appFS = new BadgeAppFSApi(
-        this.fileSystem,
-        this.disconnect.bind(this),
-        this.transaction.bind(this),
-    );
-
-    /*** NVS API */
-    public nvs = new BadgeNVSApi(
-        this.transaction.bind(this),
-    );
 }

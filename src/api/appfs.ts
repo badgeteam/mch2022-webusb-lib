@@ -3,6 +3,7 @@ import { BadgeFileSystemApi } from "./filesystem";
 import { ProgressCallback } from "../badge-api";
 import { concatBuffers } from "../lib/buffers";
 import { BadgeUSB } from "../badge-usb";
+import Queue from "../lib/queue";
 
 export type AppListing = {
     name: string,
@@ -17,6 +18,7 @@ export class BadgeAppFSApi {
         private fs: BadgeFileSystemApi,
         private disconnect: BadgeUSB['disconnect'],
         private transaction: BadgeUSB['transaction'],
+        private transactionQueue: Queue,
     ) {}
 
     textEncoder = new TextEncoder();
@@ -47,22 +49,35 @@ export class BadgeAppFSApi {
     async read(name: string): Promise<ArrayBuffer> {
         assertString('name', name);
 
-        let result = await this.transaction(BadgeUSB.PROTOCOL_COMMAND_APP_READ, this.textEncoder.encode(name), 4000);
-        if (new DataView(result).getUint8(0) !== 1) {
-            throw new Error(`Failed to open app file '${name}'`);
-        }
+        let parts: ArrayBuffer[] = [];
+        const queueToken = await this.transactionQueue.waitTurn();
+        try {
+            let result = await this.transaction(
+                BadgeUSB.PROTOCOL_COMMAND_APP_READ,
+                this.textEncoder.encode(name), 4000, queueToken,
+            );
+            if (new DataView(result).getUint8(0) !== 1) {
+                throw new Error(`Failed to open app file '${name}'`);
+            }
 
-        const chunkSize = 64;
-        let chunkSizeField = new ArrayBuffer(4);
-        new DataView(chunkSizeField).setUint32(0, chunkSize, true);
+            const chunkSize = 64;
+            let chunkSizeField = new ArrayBuffer(4);
+            new DataView(chunkSizeField).setUint32(0, chunkSize, true);
 
-        let parts = [];
-        while (true) {
-            let part = await this.transaction(BadgeUSB.PROTOCOL_COMMAND_TRANSFER_CHUNK, chunkSizeField, 4000);
-            if (part === null || part.byteLength < chunkSize) break;
-            parts.push(part);
+            let part: ArrayBuffer;
+            do {
+                part = await this.transaction(
+                    BadgeUSB.PROTOCOL_COMMAND_TRANSFER_CHUNK,
+                    chunkSizeField, 4000, queueToken,
+                );
+                if (part === null) break;
+                parts.push(part);
+            } while (part.byteLength == chunkSize)
+
+        } finally {
+            await this.fs.closeFile(queueToken); // This also works on appfs "files"
+            this.transactionQueue.release(queueToken);
         }
-        await this.fs.closeFile(); // This also works on appfs "files"
         return concatBuffers(...parts);
     }
 
@@ -83,27 +98,39 @@ export class BadgeAppFSApi {
         dataView.setUint16(2 + name.length + title.length + 4,  version, true);
 
         progressCallback?.("Allocating...", 0);
-        let result = await this.transaction(BadgeUSB.PROTOCOL_COMMAND_APP_WRITE, request.buffer, 10000);
-        if (new DataView(result).getUint8(0) !== 1) {
-            throw new Error("Failed to allocate app");
-        }
-
-        let total = data.byteLength;
+        const total = data.byteLength;
         let position = 0;
-        while (data.byteLength > 0) {
-            progressCallback?.("Writing...", Math.round((position * 100) / total));
-            let part = data.slice(0, 1024);
-            if (part.byteLength < 1) break;
 
-            let result = await this.transaction(BadgeUSB.PROTOCOL_COMMAND_TRANSFER_CHUNK, part, 4000);
-            let written = new DataView(result).getUint32(0, true);
-            if (written < 1) throw new Error("Write failed");
+        const queueToken = await this.transactionQueue.waitTurn();
+        try {
+            let result = await this.transaction(
+                BadgeUSB.PROTOCOL_COMMAND_APP_WRITE,
+                request.buffer, 10000, queueToken,
+            );
+            if (new DataView(result).getUint8(0) !== 1) {
+                throw new Error("Failed to allocate app");
+            }
 
-            position += written;
-            data = data.slice(written);
+            while (data.byteLength > 0) {
+                progressCallback?.("Writing...", Math.round((position * 100) / total));
+                let part = data.slice(0, 1024);
+                if (part.byteLength < 1) break;
+
+                let result = await this.transaction(
+                    BadgeUSB.PROTOCOL_COMMAND_TRANSFER_CHUNK,
+                    part, 4000, queueToken,
+                );
+                let written = new DataView(result).getUint32(0, true);
+                if (written < 1) throw new Error("Write failed");
+
+                position += written;
+                data = data.slice(written);
+            }
+        } finally {
+            progressCallback?.("Closing...", 100);
+            await this.fs.closeFile(queueToken);
+            this.transactionQueue.release(queueToken);
         }
-        progressCallback?.("Closing...", 100);
-        await this.fs.closeFile();
         return (position == total);
     }
 
